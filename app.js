@@ -1,6 +1,7 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { detectSections } from './guide.js?v=202611181445';
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181445';
+import { startHost, loadScript } from './remote-host.js?v=202611181518';
+import { detectSections } from './guide.js?v=202611181518';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181518';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -13,6 +14,7 @@ const S = {
   index: store.get('index', {}),
   markers: store.get('markers', {}), trim: store.get('trim', {}), mix: store.get('mix', {}),
   presets: store.get('presets', {}), pad: store.get('pad', { out: [0, 1], vol: 0.5, key: 'C' }),
+  remote: store.get('remote', { on: false, id: null, pin: null }),
   ver: store.get('ver', {}), pinned: store.get('pinned', {}), fade: store.get('fade', {}),
   arr: store.get('arr', {}), trans: store.get('trans', {}), autoDetect: store.get('autoDetect', true),
   autoAdvance: store.get('autoAdvance', true), preload: store.get('preload', false), xform: store.get('xform', {}),
@@ -451,6 +453,7 @@ function renderMixer() {
     $('.m', el).onclick = (e) => { st.mute = !st.mute; e.target.classList.toggle('on', st.mute); applyGain(st); saveMix(); };
     $('.s', el).onclick = (e) => { st.solo = !st.solo; e.target.classList.toggle('on', st.solo); E.stems.forEach(applyGain); };
     $('.m', el).classList.toggle('on', st.mute);
+    st.fEl = f; st.mEl = $('.m', el); st.sEl = $('.s', el);
     st.meter = $('.meter i', el); st.rt = $('.rt', el); box.append(el);
   });
 }
@@ -956,6 +959,7 @@ function selectTab(t) {
   if (t === 'pads') renderPads();
   if (t === 'library') { renderLibrary(); renderSetlist(); }
   if (t === 'edit') { renderVersions(); renderStructure(); }
+  if (t === 'remote') renderRemote();
 }
 
 async function fillDevices() {
@@ -1050,7 +1054,7 @@ async function transformStems(semi, tempo) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181445', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181518', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -1190,6 +1194,65 @@ addEventListener('keydown', (e) => {
 offlineDrive(); renderLibrary(); renderSetlist();
 await initAudio(); await fillDevices(); tick();
 status(`Вихід: ${E.nOut} кан.`);
+
+// ── Phone remote (host) ──
+function remoteState() {
+  const p = position(), cs = sectionAt(p), ci = cs ? E.markers.findIndex((m) => m.t === cs.start) : -1, F = fadeOf(), r1 = (v) => Math.round(v * 10) / 10, r2 = (v) => Math.round(v * 100) / 100;
+  return {
+    song: E.song?.name || '', playing: E.playing, pos: r1(p), dur: r1(E.dur), end: r1(endPos()), bpm: E.bpm || 0, loop: !!E.loop, queue: E.queue, cur: ci,
+    sections: sections().map((x) => { const i = secInfo(x.name); return { n: x.name, a: r2(x.start), b: r2(x.end), c: i.color, code: i.code }; }),
+    setlist: S.setlist.map((id) => library.find((x) => x.id === id)).filter(Boolean).map((x) => ({ id: x.id, name: x.name, cur: x === current })),
+    stems: E.stems.map((st) => ({ n: st.name, v: st.vol, m: st.mute, s: st.solo })), master: E.masterVol, padKey: P.voice?.key || null,
+    fade: F ? { t: r1(F.t), dur: r1(F.dur) } : null, locked: locked(), status: ($('#status').textContent || '').slice(0, 120),
+  };
+}
+function remoteExec(c, a) {
+  switch (c) {
+    case 'toggle': E.playing ? pause() : play(); break;
+    case 'stop': stop(); break;
+    case 'next': advance(1); break;
+    case 'prev': advance(-1); break;
+    case 'nextSection': nextSection(); break;
+    case 'queue': if (E.playing) { E.queue = a.t; renderMarkers(); } else seek(a.t); break;
+    case 'jump': E.queue = null; seek(a.t); renderMarkers(); break;
+    case 'loop': $('#btnLoop').click(); break;
+    case 'fade': fadeOutStop(a.s || 3); break;
+    case 'load': { const sg = library.find((x) => x.id === a.id); if (sg) loadSong(sg); break; }
+    case 'master': E.masterVol = Math.max(0, Math.min(1.5, +a.v)); E.master.gain.value = E.masterVol; $('#master').value = E.masterVol; break;
+    case 'vol': { const st = E.stems[a.i]; if (st) { st.vol = Math.max(0, Math.min(1.5, +a.v)); if (st.fEl) st.fEl.value = st.vol; applyGain(st); saveMix(); } break; }
+    case 'mute': E.stems[a.i]?.mEl?.click(); break;
+    case 'solo': E.stems[a.i]?.sEl?.click(); break;
+    case 'muteAll': $('#sideMute').click(); break;
+    case 'pad': padStart(a.k); break;
+    case 'padStop': padStop(3); renderPads(); break;
+  }
+}
+let REMOTE = null;
+const remoteUrl = () => new URL(`remote.html#${S.remote.id}.${S.remote.pin}`, location.href).href;
+async function remoteApply() {
+  const R = S.remote; if (REMOTE) { REMOTE.stop(); REMOTE = null; }
+  if (R.on) {
+    if (!R.id) { R.id = 'ubcpb-' + Math.random().toString(36).slice(2, 10); R.pin = String(Math.floor(1000 + Math.random() * 9000)); }
+    save('remote'); R.status = { signalling: 'connecting', clients: 0 };
+    try { REMOTE = await startHost({ id: R.id, pin: R.pin, getState: remoteState, exec: remoteExec, onStatus: (st) => { R.status = st; renderRemote(); } }); }
+    catch (e) { R.status = { error: e.message }; }
+  } else save('remote');
+  renderRemote();
+}
+async function renderRemote() {
+  const R = S.remote; if (!$('#remoteOn')) return;
+  $('#remoteOn').checked = !!R.on; $('#remoteBox').hidden = !R.on;
+  if (!R.on || !R.id) return;
+  $('#remoteUrl').value = remoteUrl(); $('#remotePin').textContent = R.pin; $('#remoteCode').textContent = R.id;
+  try { await loadScript('vendor/qrcode.js'); const qr = window.qrcode(0, 'M'); qr.addData(remoteUrl()); qr.make(); $('#remoteQr').innerHTML = qr.createSvgTag(5, 2); } catch {}
+  const st = R.status || {};
+  $('#remoteInfo').textContent = st.error ? (st.error === 'unavailable-id' ? 'Цей код уже використовується (апка відкрита в іншій вкладці?) — натисніть «Новий код»' : /network|server|socket|browser/.test(st.error) ? 'Немає зв’язку із сигнальним сервером (потрібен інтернет)' : 'Помилка: ' + st.error)
+    : st.signalling === 'open' ? `● Готово до підключення · підключено пристроїв: ${st.clients || 0}` : 'З’єднуюсь із сигнальним сервером…';
+}
+$('#remoteOn').onchange = (e) => { S.remote.on = e.target.checked; remoteApply(); };
+$('#remoteNew').onclick = () => { S.remote.id = null; S.remote.pin = null; remoteApply(); };
+$('#remoteCopy').onclick = async () => { try { await navigator.clipboard.writeText(remoteUrl()); status('Посилання скопійовано'); } catch { $('#remoteUrl').select(); } };
+if (S.remote.on) remoteApply();
 
 // Small hook for debugging / automated tests
 window.PB = { seek, S, fadeGain: () => E.stems[0]?.fade.gain.value, pos: position, playing: () => E.playing, setFade, play, mark: markCurrentSection, addSong(song) { library.push(song); renderLibrary(); }, load: loadSong, state: () => ({ markers: E.markers, dur: E.dur, tempo: E.tempo, arr: S.arr[E.song?.id] || null, stems: E.stems.map((x) => ({ name: x.name, segs: x.segs.length })) }), ops: { opDelete, opDup, opMove, opSplit, opMergeNext, opRename, resetStructure, undoArr, detectGuide } };

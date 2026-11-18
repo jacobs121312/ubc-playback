@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0c0d10">
+<title>Playback Remote</title>
+<style>
+:root{--bg:#0c0d10;--panel:#14161a;--p2:#1c1f25;--p3:#262a32;--line:#262a31;--fg:#eceef2;--dim:#7d8492;--acc:#22d6a0;--warn:#ffb020;--bad:#ff5d5d}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font:15px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;user-select:none;-webkit-user-select:none;touch-action:manipulation}
+button{font:inherit;color:inherit;background:var(--p2);border:1px solid var(--line);border-radius:14px;padding:0;cursor:pointer}
+button:active{background:var(--p3)}
+#app{display:flex;flex-direction:column;height:100%;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+#dot{width:10px;height:10px;border-radius:50%;background:var(--bad);flex:none}
+#dot.ok{background:var(--acc)}
+#song{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#bpm{color:var(--dim);font-size:13px}
+.view{flex:1;overflow:auto;padding:12px 14px;display:none}
+.view.on{display:block}
+#clock{font-size:54px;font-weight:600;font-variant-numeric:tabular-nums;text-align:center;line-height:1.05}
+#sub{text-align:center;color:var(--dim);font-variant-numeric:tabular-nums;margin-bottom:8px}
+#bar{position:relative;height:46px;border-radius:10px;overflow:hidden;background:var(--panel);border:1px solid var(--line);margin:6px 0 12px}
+#bar .seg{position:absolute;top:0;bottom:0;opacity:.35}
+#bar .ph{position:absolute;top:0;bottom:0;width:3px;background:#fff;box-shadow:0 0 6px #fff}
+#bar .fadeb{position:absolute;top:0;bottom:0;background:linear-gradient(to right,rgba(12,13,16,0),rgba(12,13,16,.9));border-left:2px dashed var(--warn)}
+.tr{display:grid;grid-template-columns:1fr 1fr 2.2fr 1fr 1fr;gap:8px;margin-bottom:12px}
+.tr button{height:66px;font-size:24px}
+#play{background:#0f2f27;border-color:var(--acc);color:var(--acc);font-size:30px}
+#play.playing{background:var(--acc);color:#04120d}
+.row2{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px}
+.row2 button{height:50px;font-size:13px;font-weight:700;letter-spacing:.05em;color:var(--dim)}
+.row2 button.on{background:var(--acc);border-color:var(--acc);color:#04120d}
+#chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{min-width:62px;height:52px;padding:0 12px;border:2px solid var(--c);color:var(--c);border-radius:14px;font-weight:700;font-size:15px;background:rgba(12,13,16,.6);display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1}
+.chip small{font-size:10px;font-weight:500;opacity:.8}
+.chip.cur{background:var(--c);color:#0c0d10}
+.chip.q{outline:3px solid #fff;outline-offset:2px}
+h4{margin:16px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
+.hint{color:var(--dim);font-size:12px;margin-top:6px}
+#status{color:var(--dim);font-size:12px;text-align:center;margin-top:10px;min-height:16px}
+nav{display:grid;grid-template-columns:repeat(4,1fr);background:var(--panel);border-top:1px solid var(--line)}
+nav button{border:0;border-radius:0;background:transparent;height:56px;color:var(--dim);font-size:13px}
+nav button.on{color:var(--acc);box-shadow:inset 0 2px 0 var(--acc)}
+#strips{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px}
+.st{flex:0 0 64px;display:flex;flex-direction:column;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 2px}
+.st .ms{display:flex;gap:4px}
+.st .ms button{width:26px;height:26px;border-radius:7px;font-size:12px;font-weight:700;color:var(--dim)}
+.st .ms .m.on{background:var(--bad);border-color:var(--bad);color:#fff}
+.st .ms .s.on{background:var(--warn);border-color:var(--warn);color:#201400}
+.st input[type=range]{writing-mode:vertical-lr;direction:rtl;height:230px;width:40px;margin:0;accent-color:var(--acc)}
+.st .n{font-size:11px;text-align:center;color:#8fe9cd;height:28px;overflow:hidden;line-height:1.15}
+#master{width:100%;accent-color:var(--acc);height:36px}
+.padk{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.padk button{height:74px;font-size:20px;font-weight:700}
+.padk button.on{background:var(--acc);border-color:var(--acc);color:#04120d}
+.songitem{display:flex;align-items:center;gap:10px;padding:14px;border-radius:12px;background:var(--panel);border:1px solid var(--line);margin-bottom:8px}
+.songitem.cur{border-color:var(--acc);background:#10382f}
+.songitem .i{color:var(--dim);width:22px}
+#conn{position:fixed;inset:0;background:rgba(12,13,16,.96);display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:28px;text-align:center;z-index:10}
+#conn.on{display:flex}
+#conn input{font:inherit;font-size:22px;text-align:center;padding:12px;border-radius:12px;background:var(--p2);border:1px solid var(--line);color:var(--fg);width:200px;user-select:text;-webkit-user-select:text}
+#conn button{padding:14px 28px;font-size:17px;background:var(--acc);color:#04120d;border-color:var(--acc);font-weight:700}
+</style>
+</head>
+<body>
+<div id="app">
+  <header><span id="dot"></span><span id="song">Playback Remote</span><span id="bpm"></span></header>
+
+  <section id="v-play" class="view on">
+    <div id="clock">00:00</div><div id="sub">-0:00 / 0:00</div>
+    <div id="bar"></div>
+    <div class="tr">
+      <button id="prev">⏮</button><button id="stop">■</button><button id="play">▶</button><button id="next">⏭</button><button id="fade" title="Fade out">◺</button>
+    </div>
+    <div class="row2"><button id="loop">LOOP</button><button id="nextsec">NEXT SECTION ▶▶</button><button id="mute">MUTE ALL</button></div>
+    <h4>Секції <small style="text-transform:none;letter-spacing:0">· тап — перейти в кінці поточної · довгий тап — одразу</small></h4>
+    <div id="chips"></div>
+    <div id="status"></div>
+  </section>
+
+  <section id="v-mix" class="view">
+    <h4>Master</h4><input id="master" type="range" min="0" max="1.5" step="0.01">
+    <h4>Стеми</h4><div id="strips"></div>
+  </section>
+
+  <section id="v-pads" class="view">
+    <h4>Ambient-пади</h4><div class="padk" id="padk"></div>
+    <div class="row2" style="margin-top:14px;grid-template-columns:1fr"><button id="padstop">■ Зупинити пад</button></div>
+  </section>
+
+  <section id="v-set" class="view"><h4>Сетліст</h4><div id="setlist"></div></section>
+
+  <nav id="nav"><button data-v="play" class="on">Грати</button><button data-v="mix">Мікс</button><button data-v="pads">Пади</button><button data-v="set">Сетліст</button></nav>
+</div>
+
+<div id="conn">
+  <h2 style="margin:0">Підключення до Playback</h2>
+  <div class="hint" id="connMsg">Відскануйте QR-код у програмі на ноутбуці (Меню → Пульт) або введіть код</div>
+  <input id="inId" placeholder="Код пристрою" autocapitalize="off" autocomplete="off">
+  <input id="inPin" placeholder="PIN" inputmode="numeric" maxlength="4">
+  <button id="go">Підключитись</button>
+</div>
+<script src="vendor/peerjs.min.js"></script>
+<script src="remote.js"></script>
+</body>
+</html>

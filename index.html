@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181445">
+<link rel="stylesheet" href="style.css?v=202611181518">
 </head>
 <body>
 <header id="top">
@@ -29,6 +29,7 @@
       <nav id="tabs">
         <button data-tab="patch">Патч / роутинг</button>
         <button data-tab="pads">Пади</button>
+        <button data-tab="remote">📱 Пульт (телефон)</button>
         <button data-tab="settings">Налаштування</button>
       </nav>
     </div>
@@ -179,6 +180,24 @@
       </div>
     </section>
 
+    <section id="tab-remote" class="tab" hidden>
+      <h3>Керування з телефона</h3>
+      <label class="chk"><input type="checkbox" id="remoteOn"> Увімкнути віддалене керування (телефон і ноутбук мають бути онлайн; звук лишається на ноутбуці)</label>
+      <div id="remoteBox" hidden>
+        <div class="remote">
+          <div id="remoteQr" class="qr"></div>
+          <div>
+            <p class="hint">Відскануйте QR камерою телефона — відкриється пульт. Додайте сторінку на головний екран, щоб відкривати одним тапом (код і PIN запам'ятаються).</p>
+            <label class="form">Посилання <input id="remoteUrl" readonly></label>
+            <div class="row"><button id="remoteCopy">Копіювати</button><button id="remoteNew" title="Скинути старі підключення і створити новий код/PIN">Новий код</button></div>
+            <p>PIN: <b id="remotePin" style="font-size:20px;letter-spacing:.2em"></b> · код: <small id="remoteCode"></small></p>
+            <div id="remoteInfo" class="hint"></div>
+          </div>
+        </div>
+        <p class="hint">Як це працює: команди йдуть напряму між телефоном і ноутбуком (WebRTC), через інтернет проходить лише початкове з'єднання (безкоштовний сервер PeerJS). Без PIN підключитись неможливо. «Новий код» відключає всі телефони.</p>
+      </div>
+    </section>
+
     <section id="tab-settings" class="tab" hidden>
       <h3>Аудіовихід (Dante)</h3>
       <div class="form">
@@ -207,6 +226,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181445"></script>
+<script type="module" src="app.js?v=202611181518"></script>
 </body>
 </html>
