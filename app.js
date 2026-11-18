@@ -128,15 +128,18 @@ const loadGIS = () => new Promise((res) => {
   if (window.google?.accounts?.oauth2) return res();
   const s = document.createElement('script'); s.src = 'https://accounts.google.com/gsi/client'; s.onload = res; document.head.append(s);
 });
+loadGIS();                    // preload so the sign-in popup opens inside the click's user gesture
 async function getToken() {
   if (token && Date.now() < tokenExp - 60000) return token;
   if (!S.clientId) throw new Error('Вкажіть OAuth Client ID у Налаштуваннях');
   await loadGIS();
+  status('Відкриваю вхід Google… якщо вікна немає — дозвольте спливаючі вікна для цього сайту');
   return new Promise((res, rej) => {
     google.accounts.oauth2.initTokenClient({
       client_id: S.clientId, scope: 'https://www.googleapis.com/auth/drive.readonly',
       callback: (r) => { if (r.error) rej(new Error(r.error)); else { token = r.access_token; tokenExp = Date.now() + r.expires_in * 1000; res(token); } },
-      error_callback: (e) => rej(new Error(e.type || 'auth error')),
+      error_callback: (e) => rej(new Error(e.type === 'popup_failed_to_open' ? 'браузер заблокував вікно входу — дозвольте спливаючі вікна (іконка у адресному рядку) і натисніть ще раз'
+        : e.type === 'popup_closed' ? 'вікно входу закрито' : (e.type || 'auth error'))),
     }).requestAccessToken();
   });
 }
