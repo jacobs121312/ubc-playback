@@ -4,9 +4,37 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181604">
+<link rel="stylesheet" href="style.css?v=202611181619">
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-sections" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4" rx="1.5"/><rect x="3" y="10" width="12" height="4" rx="1.5"/><rect x="3" y="16" width="15" height="4" rx="1.5"/></symbol>
+    <symbol id="i-tune" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+    <symbol id="i-fade" viewBox="0 0 24 24"><path d="M3 5c8 0 10 14 18 14"/><path d="M3 21h18" opacity=".35"/></symbol>
+    <symbol id="i-pad" viewBox="0 0 24 24"><path d="M2 12c2-7 4-7 6 0s4 7 6 0 4-7 6 0"/></symbol>
+    <symbol id="i-ver" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-drag" viewBox="0 0 24 24"><g fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></g></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6.5A2.5 2.5 0 0 0 13.5 4h-7A2.5 2.5 0 0 0 4 6.5v7A2.5 2.5 0 0 0 6.5 16H8"/></symbol>
+    <symbol id="i-anchor" viewBox="0 0 24 24"><path d="M5 4v16M9 12h11M13 8l-4 4 4 4"/></symbol>
+    <symbol id="i-merge" viewBox="0 0 24 24"><path d="M4 6h5l3 6 3 6h5M4 18h5l3-6 3-6h5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L20 18M8 15.5L20 6"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-join" viewBox="0 0 24 24"><path d="M3 12h5M16 12h5M8 7v10M16 7v10"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4l10 17H2z"/><path d="M12 10v5M12 18v.5"/></symbol>
+    <symbol id="i-trim" viewBox="0 0 24 24"><path d="M4 6v12M20 6v12M8 12h8M8 12l3-3M8 12l3 3M16 12l-3-3M16 12l-3 3"/></symbol>
+  </defs>
+</svg>
 <div id="home" class="screen">
   <div class="wrap">
     <div class="hero"><div class="logo">▶ Playback</div><div class="hint">Створіть неділю, зберіть сетліст — і запускайте. Усе потрібне завантажиться наперед.</div>
@@ -151,82 +179,156 @@
       <label class="chk"><input type="checkbox" id="chkAuto"> Авто-перехід на наступну пісню</label>
     </section>
 
-    <section id="tab-edit" class="tab" hidden>
-      <h3>Пад пісні</h3>
-      <div class="row">
-        <select id="songPadKey" class="inline"><option value="">— без паду —</option></select>
-        <label class="chk"><input type="checkbox" id="songPadAuto"> Запускати пад разом із піснею (плавний вхід), зупиняти зі стопом</label>
-        <button id="songPadNow">▶ Пад зараз</button>
-        <button id="btnClickSettings" hidden>⚙ Налаштування метронома</button>
-      </div>
+    <section id="tab-edit" class="tab edit" hidden>
+      <header class="eh">
+        <div class="eh-main">
+          <div class="eh-kicker">Редактор пісні</div>
+          <h2 id="ehTitle">—</h2>
+          <div id="ehMeta" class="eh-meta"></div>
+        </div>
+        <div id="ehChips" class="chips"></div>
+      </header>
+      <div class="ebody">
+        <nav id="enav" class="enav">
+          <button data-p="struct" class="on"><svg class="ic"><use href="#i-sections"/></svg><span>Структура</span></button>
+          <button data-p="tone"><svg class="ic"><use href="#i-tune"/></svg><span>Тон і темп</span></button>
+          <button data-p="fade"><svg class="ic"><use href="#i-fade"/></svg><span>Fade-out</span></button>
+          <button data-p="pad"><svg class="ic"><use href="#i-pad"/></svg><span>Пад</span></button>
+          <button data-p="ver"><svg class="ic"><use href="#i-ver"/></svg><span>Версії</span></button>
+          <button data-p="export"><svg class="ic"><use href="#i-export"/></svg><span>Обрізка й експорт</span></button>
+          <div class="enav-foot"><kbd>⌘Z</kbd> скасувати · <kbd>Esc</kbd> закрити</div>
+        </nav>
 
-      <h3>Структура пісні</h3>
-      <div class="row">
-        <button id="btnDetect" title="Розпізнати голосові підказки Guide (Verse, Chorus…) і розставити секції">🎙 Визначити по Guide</button>
-        <button id="btnMark" title="Додати секцію в позиції курсору">＋ Секція тут</button>
-        <button id="btnSplit" title="Розділити секцію в позиції курсору на дві">✂ Розділити тут</button>
-        <button id="btnUndo" title="Скасувати (Cmd+Z)">↶ Скасувати</button>
-        <button id="btnResetStruct" title="Повернути початкову структуру">Скинути</button>
-      </div>
-      <label class="chk"><input type="checkbox" id="chkDetect"> Автоматично визначати секції по Guide для пісень без розмітки (перший раз завантажується модель ~40 МБ)</label>
-      <div class="row" id="quickAdd">
-        <b style="font-size:12px;color:var(--dim)">Додати ще один:</b>
-        <button data-c="C">＋ Приспів</button><button data-c="V">＋ Куплет</button><button data-c="B">＋ Брідж</button><button data-c="Pc">＋ Пре-приспів</button><button data-c="Tg">＋ Тег</button>
-        <small class="hint">копія останньої такої секції вставляється після секції під курсором і одразу програється зі стику</small>
-      </div>
-      <div class="row">
-        <button id="joinPrev" title="Програти з 4 с до наступного стику">▶ Прослухати стики</button>
-        <label class="chk">Плавність стиків
-          <select id="xfMode" class="inline"><option value="short">різка (12 мс)</option><option value="mid">звичайна (30 мс)</option><option value="long">м'яка (80 мс)</option></select></label>
-      </div>
-      <div id="structList" class="structlist"></div>
-      <p class="hint">Правки структури змінюють саму пісню: видалена секція не гратиме, дубльована повториться, порядок можна міняти. «⇤» ставить початок секції в позицію курсору. Експорт стемів теж бере вже змінену структуру. Початок/кінець нижче діє, поки структуру не змінено.</p>
-      <h3>Версії та закріплення</h3>
-      <div class="row">
-        <select id="verSel" class="inline"></select>
-        <button id="verApply" title="Відкрити збережену версію">Застосувати</button>
-        <button id="verSave" title="Зберегти поточний стан (структура, тональність/темп, мікс) як нову версію">＋ Зберегти як версію…</button>
-        <button id="verOverwrite">Перезаписати</button>
-        <button id="verMain" title="Основна версія — та, що закріплюється">★ Основна</button>
-        <button id="verDelete">Видалити</button>
-      </div>
-      <label class="chk"><input type="checkbox" id="chkPin"> 🔒 Закріпити основну версію: щоразу відкривається саме вона, структура й тон не змінюються випадково</label>
-      <div id="verInfo" class="hint"></div>
-      <div class="row">
-        <button id="verExport" title="Зберегти файл з усіма версіями. Покладіть playback-versions.json у головну папку Playback на Drive — усі лідери побачать ці версії">⬇ Експорт версій</button>
-        <button id="verImport">⬆ Імпорт версій</button>
-        <input type="file" id="verFile" accept=".json,application/json" hidden>
-      </div>
-      <p class="hint">Версія зберігає: структуру (видалені/продубльовані/переставлені секції), мітки, тональність і темп, стан міксу та режим переходу. Щоб усі лідери грали одне й те саме: експортуйте версії й покладіть файл <b>playback-versions.json</b> у головну папку Playback на Drive — апка сама підтягне його при підключенні до Drive.</p>
+        <div class="epanes">
+          <!-- STRUCTURE -->
+          <div class="pane on" data-p="struct">
+            <details id="report" class="banner" hidden><summary></summary><ul></ul></details>
 
-      <h3>Fade-out у вибраний момент</h3>
-      <div class="row">
-        <button id="fadeSet" title="Fade почнеться з позиції курсору">⤓ Fade з курсору</button>
-        <button id="fadeSecEnd" title="Fade закінчується в кінці поточної секції">⤓ Fade в кінці секції</button>
-        <label class="chk">тривалість <input id="fadeDur" type="number" min="0.5" max="60" step="0.5" value="4" style="width:64px"> с</label>
-        <button id="fadeTest" title="Програти за 4 с до початку фейду">▶ Прослухати</button>
-        <button id="fadeClear">✕ Прибрати</button>
-      </div>
-      <div id="fadeInfo" class="hint"></div>
-      <p class="hint">Поставте курсор (клік по хвилі) у момент, де має починатись затухання, натисніть «Fade з курсору» — пісня затухне за вказаний час і сама закінчиться. Fade зберігається з версією пісні та враховується в експорті WAV.</p>
+            <div class="card hero-card">
+              <div class="hc-ic"><svg class="ic"><use href="#i-mic"/></svg></div>
+              <div class="hc-tx"><b>Секції по Guide</b><span>Апка слухає голосові підказки гайда (Verse, Chorus…) і розставляє секції на таймлайні.</span></div>
+              <button id="btnDetect" class="btn solid"><svg class="ic"><use href="#i-mic"/></svg>Визначити</button>
+              <label class="sw"><input type="checkbox" id="chkDetect"><span class="trk"></span><span class="lbl">Авто для нових пісень</span></label>
+            </div>
 
-      <h3>Початок / кінець</h3>
-      <div class="row">
-        <button id="btnStartHere">⇤ Старт тут</button>
-        <button id="btnEndHere">⇥ Кінець тут</button>
-        <button id="btnClearTrim">✕ Скинути</button>
+            <div class="etl-wrap"><div id="etl" class="etl"></div></div>
+
+            <div class="toolbar">
+              <div class="grp">
+                <button id="btnMark" class="btn"><svg class="ic"><use href="#i-plus"/></svg>Секція тут</button>
+                <button id="btnSplit" class="btn"><svg class="ic"><use href="#i-scissors"/></svg>Розділити</button>
+              </div>
+              <div class="grp">
+                <button id="btnUndo" class="btn ghost"><svg class="ic"><use href="#i-undo"/></svg>Скасувати</button>
+                <button id="btnResetStruct" class="btn ghost">Скинути</button>
+              </div>
+              <div class="grp right">
+                <button id="joinPrev" class="btn ghost" title="Програти з 4 с до наступного стику"><svg class="ic"><use href="#i-join"/></svg>Прослухати стики</button>
+                <label class="mini">Плавність
+                  <select id="xfMode"><option value="short">різка · 12 мс</option><option value="mid">звичайна · 30 мс</option><option value="long">м'яка · 80 мс</option></select></label>
+              </div>
+            </div>
+
+            <div id="quickAdd" class="quick">
+              <span class="ql">Додати ще один</span>
+              <button data-c="C" style="--c:#22d6a0"><i></i>Приспів</button>
+              <button data-c="V" style="--c:#4c9dff"><i></i>Куплет</button>
+              <button data-c="B" style="--c:#ff6bb5"><i></i>Брідж</button>
+              <button data-c="Pc" style="--c:#ffb020"><i></i>Пре-приспів</button>
+              <button data-c="Tg" style="--c:#ff8a4c"><i></i>Тег</button>
+              <span class="qh">копія вставляється після секції під курсором і одразу грає зі стику</span>
+            </div>
+
+            <div class="listhead"><h3>Секції</h3><div id="estSel" class="estsel" hidden><span id="estSelInfo"></span><button id="estSelDel" class="btn danger sm"><svg class="ic"><use href="#i-trash"/></svg>Видалити</button><button id="estSelClear" class="btn ghost sm">Зняти</button></div></div>
+            <div id="structList" class="structlist"></div>
+            <p class="foot">Перетягніть ⠿ щоб змінити порядок · клік по назві — перейменувати · Shift/Ctrl+клік по кольоровому бейджу — вибрати кілька.</p>
+          </div>
+
+          <!-- TONE -->
+          <div class="pane" data-p="tone">
+            <div class="card">
+              <div class="card-h"><h3>Тональність і темп</h3><span class="muted">обробка офлайн · 10–60 с · Click і Guide не транспонуються</span></div>
+              <div class="tone-grid">
+                <div class="field"><label>Тональність</label>
+                  <div class="stepper"><button id="xSemiDn" class="ib" type="button">−</button><div class="sval"><b id="xSemiVal">0</b><small>півтонів</small></div><button id="xSemiUp" class="ib" type="button">+</button></div>
+                  <select id="xSemi" hidden></select></div>
+                <div class="field wide"><label>Темп <b id="xTempoVal" class="pill">100%</b></label>
+                  <input id="xTempo" class="range" type="range" min="70" max="130" step="1" value="100">
+                  <div class="rangescale"><span>70%</span><span>100%</span><span>130%</span></div></div>
+              </div>
+              <div class="actions"><button id="xApply" class="btn solid">Застосувати</button><button id="xReset" class="btn ghost">Скинути до оригіналу</button></div>
+            </div>
+          </div>
+
+          <!-- FADE -->
+          <div class="pane" data-p="fade">
+            <div class="card">
+              <div class="card-h"><h3>Fade-out у вибраний момент</h3><span class="muted">пісня плавно затихає й сама закінчується</span></div>
+              <div id="fadeInfo" class="status-line"></div>
+              <div class="field"><label>Тривалість</label>
+                <div class="stepper"><button id="fadeDn" class="ib" type="button">−</button><div class="sval"><input id="fadeDur" type="number" min="0.5" max="60" step="0.5" value="4"><small>секунд</small></div><button id="fadeUp" class="ib" type="button">+</button></div></div>
+              <div class="actions">
+                <button id="fadeSet" class="btn solid"><svg class="ic"><use href="#i-fade"/></svg>Fade з курсору</button>
+                <button id="fadeSecEnd" class="btn">Fade в кінці секції</button>
+                <button id="fadeTest" class="btn ghost"><svg class="ic fill"><use href="#i-play"/></svg>Прослухати</button>
+                <button id="fadeClear" class="btn ghost">Прибрати</button>
+              </div>
+              <p class="foot">Поставте курсор кліком по хвилі там, де має початись затухання. Fade зберігається з версією пісні й застосовується в експорті. Спершу змінюйте структуру, потім ставте fade.</p>
+            </div>
+          </div>
+
+          <!-- PAD -->
+          <div class="pane" data-p="pad">
+            <div class="card">
+              <div class="card-h"><h3>Пад пісні</h3><span class="muted">ambient-пад у тональності пісні</span></div>
+              <div id="padKeyGrid" class="keygrid"></div>
+              <select id="songPadKey" hidden><option value="">— без паду —</option></select>
+              <label class="sw big"><input type="checkbox" id="songPadAuto"><span class="trk"></span><span class="lbl">Запускати пад разом із піснею <small>плавний вхід, зупиняється зі стопом</small></span></label>
+              <div class="actions"><button id="songPadNow" class="btn"><svg class="ic fill"><use href="#i-play"/></svg>Пад зараз</button><button id="btnClickSettings" class="btn" hidden>⚙ Налаштування метронома</button></div>
+            </div>
+          </div>
+
+          <!-- VERSIONS -->
+          <div class="pane" data-p="ver">
+            <div class="card">
+              <div class="card-h"><h3>Збережені версії</h3><span class="muted">те, що грається щонеділі</span></div>
+              <div class="field"><label>Версія</label><select id="verSel" class="full"></select></div>
+              <div class="actions">
+                <button id="verApply" class="btn solid">Застосувати</button>
+                <button id="verSave" class="btn"><svg class="ic"><use href="#i-plus"/></svg>Зберегти як нову…</button>
+                <button id="verOverwrite" class="btn ghost">Перезаписати</button>
+                <button id="verMain" class="btn ghost"><svg class="ic"><use href="#i-star"/></svg>Основна</button>
+                <button id="verDelete" class="btn ghost danger-t">Видалити</button>
+              </div>
+              <label class="sw big pin"><input type="checkbox" id="chkPin"><span class="trk"></span><span class="lbl"><svg class="ic"><use href="#i-lock"/></svg>Закріпити основну версію <small>щоразу відкривається саме вона; структуру й тон не змінити випадково</small></span></label>
+              <div id="verInfo" class="status-line"></div>
+              <p class="foot">Версія зберігає структуру, мітки, тональність і темп, мікс, fade-out, пад і режим переходу.</p>
+            </div>
+            <div class="card">
+              <div class="card-h"><h3>Обмін між лідерами</h3></div>
+              <p class="muted" style="margin:0 0 12px">Експортуйте версії й покладіть <b>playback-versions.json</b> у головну папку Playback на Drive — апка сама підтягне файл при підключенні.</p>
+              <div class="actions"><button id="verExport" class="btn"><svg class="ic"><use href="#i-export"/></svg>Експорт версій</button><button id="verImport" class="btn"><svg class="ic"><use href="#i-upload"/></svg>Імпорт версій</button><input type="file" id="verFile" accept=".json,application/json" hidden></div>
+            </div>
+          </div>
+
+          <!-- EXPORT -->
+          <div class="pane" data-p="export">
+            <div class="card">
+              <div class="card-h"><h3>Початок і кінець пісні</h3><span class="muted">діє, поки структуру не змінено</span></div>
+              <div class="actions">
+                <button id="btnStartHere" class="btn"><svg class="ic"><use href="#i-anchor"/></svg>Старт тут</button>
+                <button id="btnEndHere" class="btn"><svg class="ic"><use href="#i-trim"/></svg>Кінець тут</button>
+                <button id="btnClearTrim" class="btn ghost">Скинути обрізку</button>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-h"><h3>Експорт стемів</h3><span class="muted">WAV 24-bit · зі змінами структури, тону/темпу й fade-out</span></div>
+              <div class="actions"><button id="btnExport" class="btn solid"><svg class="ic"><use href="#i-export"/></svg>Експортувати в папку…</button></div>
+              <p class="foot">Оберіть папку (наприклад синхронізовану з Drive): для пісні створиться підпапка зі стемами.</p>
+            </div>
+          </div>
+        </div>
       </div>
-      <h3>Тональність і темп</h3>
-      <div class="row xf" title="Обробка офлайн. Click і Guide не транспонуються.">
-        Тон <select id="xSemi" class="inline"></select>
-        Темп <input id="xTempo" type="range" min="70" max="130" step="1" value="100"><b id="xTempoVal">100%</b>
-        <button id="xApply">Застосувати</button><button id="xReset">Скинути</button>
-      </div>
-      <h3>Експорт</h3>
-      <div class="row">
-        <button id="btnExport" title="Зберегти стеми як WAV у папку (напр. синхронізовану з Drive)">⬇ Експорт стемів (WAV)</button>
-      </div>
-      <details id="report" hidden><summary></summary><ul></ul></details>
     </section>
 
     <section id="tab-patch" class="tab" hidden>
@@ -324,6 +426,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181604"></script>
+<script type="module" src="app.js?v=202611181619"></script>
 </body>
 </html>

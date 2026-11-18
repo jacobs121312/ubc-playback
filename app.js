@@ -1,7 +1,7 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { startHost, loadScript } from './remote-host.js?v=202611181604';
-import { detectSections } from './guide.js?v=202611181604';
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181604';
+import { startHost, loadScript } from './remote-host.js?v=202611181619';
+import { detectSections } from './guide.js?v=202611181619';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181619';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -634,26 +634,86 @@ function resetStructure() { if (!E.song) return; if (!S.arr[E.song.id]) return s
 function renderStructure() {
   const box = $('#structList'); if (!box) return;
   box.innerHTML = ''; E.sel.forEach((i) => { if (i >= E.markers.length) E.sel.delete(i); });
-  if (!E.markers.length) { box.innerHTML = '<p class="hint">Секцій ще немає. Натисніть «Визначити по Guide» або «＋ Секція тут».</p>'; return; }
+  if (!E.markers.length) { box.innerHTML = '<div class="empty-state"><b>Секцій ще немає</b><span>Натисніть «Визначити» — апка послухає Guide — або поставте курсор на хвилі й додайте секцію вручну.</span></div>'; renderEditTimeline(); renderEditHeader(); return; }
   E.markers.forEach((m, i) => {
     const next = E.markers[i + 1] ? E.markers[i + 1].t : E.dur, info = secInfo(m.name);
-    const row = document.createElement('div'); row.className = 'srow';
-    row.innerHTML = `<input type="checkbox" class="ck" title="Вибрати (Shift — діапазон)"><span class="sb"></span><input class="sn" placeholder="назва"><span class="st"></span>
-      <button class="go" title="Перейти">▶</button><button class="up" title="Вгору">▲</button><button class="dn" title="Вниз">▼</button>
-      <button class="dup" title="Дублювати (повторити секцію)">⧉</button><button class="ss" title="Початок секції = позиція курсору">⇤</button>
-      <button class="mg" title="Об’єднати з наступною">⤵</button><button class="del" title="Видалити секцію">✕</button>`;
+    const row = document.createElement('div'); row.className = 'srow'; row.draggable = true; row.style.setProperty('--c', info.color);
+    const I = (id, cls = '') => `<svg class="ic ${cls}"><use href="#i-${id}"/></svg>`;
+    row.innerHTML = `<span class="grip" title="Перетягнути">${I('drag')}</span><label class="chkbox" title="Вибрати (Shift — діапазон)"><input type="checkbox" class="ck"><i></i></label>
+      <span class="sb"></span><input class="sn" placeholder="Назва секції" spellcheck="false"><span class="dur"></span><span class="rng"></span>
+      <span class="acts">
+        <button class="ib go" title="Перейти">${I('play', 'fill')}</button><button class="ib up" title="Вгору">${I('up')}</button><button class="ib dn" title="Вниз">${I('down')}</button>
+        <button class="ib dup" title="Дублювати — повторити секцію">${I('copy')}</button><button class="ib ss" title="Початок секції = позиція курсору">${I('anchor')}</button>
+        <button class="ib mg" title="Об’єднати з наступною">${I('merge')}</button><button class="ib del" title="Видалити секцію">${I('trash')}</button>
+      </span>`;
     $('.ck', row).onclick = (e) => { e.stopPropagation(); if (e.shiftKey && E.lastSel != null) selectSection(i, e); else { E.sel.has(i) ? E.sel.delete(i) : E.sel.add(i); E.lastSel = i; refreshSel(); } };
     if (E.sel.has(i)) row.classList.add('sel');
-    const sb = $('.sb', row); sb.textContent = info.code; sb.style.setProperty('--c', info.color);
+    const sb = $('.sb', row); sb.textContent = info.code;
     const inp = $('.sn', row); inp.value = m.name; inp.onchange = () => opRename(i, inp.value.trim());
-    $('.st', row).textContent = `${fmt(m.t)}–${fmt(next)} (${fmt(next - m.t)})`;
+    inp.onkeydown = (e) => { if (e.key === 'Enter') inp.blur(); e.stopPropagation(); };
+    $('.dur', row).textContent = fmt(next - m.t); $('.rng', row).textContent = `${fmt(m.t)} – ${fmt(next)}`;
     $('.go', row).onclick = () => { E.queue = null; seek(m.t); };
     $('.up', row).onclick = () => opMove(i, -1); $('.dn', row).onclick = () => opMove(i, 1);
     $('.dup', row).onclick = () => opDup(i); $('.ss', row).onclick = () => opSetStart(i);
     $('.mg', row).onclick = () => opMergeNext(i); $('.del', row).onclick = () => opDelete(i);
+    row.ondragstart = (e) => { e.dataTransfer.setData('text/plain', String(i)); e.dataTransfer.effectAllowed = 'move'; row.classList.add('drag'); };
+    row.ondragend = () => { row.classList.remove('drag'); document.querySelectorAll('.srow.over').forEach((r) => r.classList.remove('over')); };
+    row.ondragover = (e) => { e.preventDefault(); row.classList.add('over'); };
+    row.ondragleave = () => row.classList.remove('over');
+    row.ondrop = (e) => { e.preventDefault(); const from = +e.dataTransfer.getData('text/plain'); row.classList.remove('over'); if (Number.isFinite(from) && from !== i) opReorder(from, i); };
     box.append(row);
   });
-  refreshSel();
+  renderEditTimeline(); renderEditHeader(); refreshSel();
+}
+function opReorder(from, to) { if (guardLock()) return; const a = curArr(); if (from < 0 || from >= a.length || to < 0 || to >= a.length) return; const [it] = a.splice(from, 1); a.splice(to, 0, it); commitArr(a); }
+
+// ── Premium Edit sheet: header, mini-timeline, tabs, steppers ──
+const EDT = { pane: (() => { try { return sessionStorage.getItem('pb.editPane') || 'struct'; } catch { return 'struct'; } })() };
+function setEditPane(p) {
+  EDT.pane = p; try { sessionStorage.setItem('pb.editPane', p); } catch {}
+  document.querySelectorAll('#enav button').forEach((b) => b.classList.toggle('on', b.dataset.p === p));
+  document.querySelectorAll('.epanes .pane').forEach((x) => x.classList.toggle('on', x.dataset.p === p));
+}
+document.querySelectorAll('#enav button').forEach((b) => (b.onclick = () => setEditPane(b.dataset.p)));
+function renderEditHeader() {
+  if (!$('#ehTitle')) return;
+  const id = E.song?.id, ver = id && S.ver[id], x = id && S.xform[id], F = fadeOf();
+  $('#ehTitle').textContent = E.song ? E.song.name : 'Пісню не вибрано';
+  $('#ehMeta').textContent = E.song ? [fmt(E.dur), `${E.stems.length} стемів`, E.bpm ? `${Math.round(E.bpm * 10) / 10} BPM` : '', `${E.markers.length} секцій`].filter(Boolean).join(' · ') : 'Оберіть пісню в сетлісті';
+  const chips = []; const add = (t, cls = '') => chips.push(`<span class="chip2 ${cls}">${t}</span>`);
+  if (id && S.pinned[id]) add(`<svg class="ic"><use href="#i-lock"/></svg>Закріплено «${ver?.main || ''}»`, 'acc');
+  else if (ver && Object.keys(ver.list).length) add(`<svg class="ic"><use href="#i-star"/></svg>Версій: ${Object.keys(ver.list).length}`);
+  if (id && S.arr[id]) add('Структуру змінено', 'warn');
+  if (x && (x.semi || x.tempo !== 1)) add(`Тон ${x.semi > 0 ? '+' : ''}${x.semi} · ${Math.round(x.tempo * 100)}%`);
+  if (F) add(`Fade ${fmt(F.t)}→${fmt(F.t + F.dur)}`);
+  if (id && S.songPad[id]?.key) add(`Пад ${S.songPad[id].key}${S.songPad[id].auto ? ' · авто' : ''}`);
+  $('#ehChips').innerHTML = chips.join('');
+}
+function renderEditTimeline() {
+  const box = $('#etl'); if (!box) return; box.innerHTML = '';
+  if (!E.dur || !E.markers.length) { box.innerHTML = '<div class="etl-empty">Таймлайн секцій з’явиться тут</div>'; return; }
+  E.markers.forEach((m, i) => {
+    const end = E.markers[i + 1] ? E.markers[i + 1].t : E.dur, info = secInfo(m.name);
+    const el = document.createElement('button'); el.className = 'eb'; el.style.cssText = `left:${(m.t / E.dur) * 100}%;width:${((end - m.t) / E.dur) * 100}%;--c:${info.color}`;
+    el.innerHTML = `<i>${info.code}</i>`; el.title = `${m.name || 'секція'} · ${fmt(m.t)}–${fmt(end)}\nКлік — перейти, Shift/Ctrl+клік — вибрати`;
+    el.onclick = (e) => { if (e.shiftKey || e.metaKey || e.ctrlKey) selectSection(i, e); else { E.queue = null; seek(m.t); } };
+    box.append(el);
+  });
+  const ph = document.createElement('div'); ph.id = 'etPh'; ph.className = 'etph'; box.append(ph); refreshSel();
+}
+function syncSemiLabel() { const v = +$('#xSemi').value || 0; $('#xSemiVal').textContent = (v > 0 ? '+' : '') + v; }
+function paintRange() { const r = $('#xTempo'); r.style.setProperty('--p', ((r.value - r.min) / (r.max - r.min)) * 100 + '%'); }
+$('#xSemiDn').onclick = () => { $('#xSemi').value = Math.max(-6, (+$('#xSemi').value || 0) - 1); syncSemiLabel(); };
+$('#xSemiUp').onclick = () => { $('#xSemi').value = Math.min(6, (+$('#xSemi').value || 0) + 1); syncSemiLabel(); };
+$('#xTempo').addEventListener('input', paintRange);
+$('#fadeDn').onclick = () => { $('#fadeDur').value = Math.max(0.5, (+$('#fadeDur').value || 4) - 0.5); $('#fadeDur').dispatchEvent(new Event('change')); };
+$('#fadeUp').onclick = () => { $('#fadeDur').value = Math.min(60, (+$('#fadeDur').value || 4) + 0.5); $('#fadeDur').dispatchEvent(new Event('change')); };
+function syncPadGrid() {
+  const grid = $('#padKeyGrid'); if (!grid) return; const cur = $('#songPadKey').value;
+  if (!grid.children.length) {
+    ['', ...KEYS].forEach((k) => { const b = document.createElement('button'); b.type = 'button'; b.dataset.k = k; b.textContent = k || 'Без паду'; if (!k) b.className = 'none'; b.onclick = () => { $('#songPadKey').value = k; $('#songPadKey').dispatchEvent(new Event('change')); syncPadGrid(); renderEditHeader(); }; grid.append(b); });
+  }
+  [...grid.children].forEach((b) => b.classList.toggle('on', b.dataset.k === cur));
 }
 
 // ── Fade-out UI ──
@@ -695,6 +755,8 @@ function refreshSel() {
   document.querySelectorAll('#sections .sec').forEach((el, i) => el.classList.toggle('sel', E.sel.has(i)));
   document.querySelectorAll('#structList .srow').forEach((el, i) => { el.classList.toggle('sel', E.sel.has(i)); const c = $('.ck', el); if (c) c.checked = E.sel.has(i); });
   $('#selbar').hidden = !E.sel.size; $('#selInfo').textContent = `Вибрано секцій: ${E.sel.size}`;
+  document.querySelectorAll('#etl .eb').forEach((el, i) => el.classList.toggle('sel', E.sel.has(i)));
+  if ($('#estSel')) { $('#estSel').hidden = !E.sel.size; $('#estSelInfo').textContent = `Вибрано: ${E.sel.size}`; }
 }
 function opDeleteMany(idx) {
   if (guardLock()) return;
@@ -706,6 +768,7 @@ function opDeleteMany(idx) {
 }
 $('#selDel').onclick = () => opDeleteMany([...E.sel]);
 $('#selClear').onclick = clearSel;
+$('#estSelDel').onclick = () => opDeleteMany([...E.sel]); $('#estSelClear').onclick = clearSel;
 addEventListener('keydown', (e) => {
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
   if ((e.code === 'Delete' || e.code === 'Backspace') && E.sel.size) { e.preventDefault(); opDeleteMany([...E.sel]); }
@@ -1016,12 +1079,12 @@ function selectTab(t) {
   $('#menu').hidden = true;
   const ov = $('#overlay');
   if (!t || t === 'mixer') { ov.hidden = true; return; }
-  ov.hidden = false;
+  ov.hidden = false; ov.classList.toggle('edit', t === 'edit'); $('#sheet').classList.toggle('wide', t === 'edit');
   document.querySelectorAll('.tab').forEach((x) => { x.hidden = x.id !== 'tab-' + t; });
   if (t === 'patch') renderMatrix();
   if (t === 'pads') renderPads();
   if (t === 'library') { renderLibrary(); renderSetlist(); }
-  if (t === 'edit') { renderVersions(); renderStructure(); renderSongPad(); }
+  if (t === 'edit') { renderVersions(); renderStructure(); renderSongPad(); renderFade(); syncXform(); setEditPane(EDT.pane); }
   if (t === 'remote') renderRemote();
 }
 
@@ -1047,6 +1110,7 @@ function tick() {
     $('#clock').textContent = `${String(Math.floor(p / 60)).padStart(2, '0')}:${String(Math.floor(p % 60)).padStart(2, '0')}`;
     $('#clockSub').textContent = `-${fmt(Math.max(0, E.dur - p))} / ${fmt(E.dur)}`;
     $('#playhead').style.left = (E.dur ? (p / E.dur) * 100 : 0) + '%';
+    const eph = $('#etPh'); if (eph && !$('#overlay').hidden && E.dur) eph.style.left = (p / E.dur) * 100 + '%';
     const cs = sectionAt(p), ci = cs ? E.markers.findIndex((m) => m.t === cs.start) : -1;
     document.querySelectorAll('#sections .sec').forEach((el, i) => el.classList.toggle('cur', i === ci));
     E.stems.forEach((st) => {
@@ -1117,7 +1181,7 @@ async function transformStems(semi, tempo, stems = E.stems, progress = null) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181604', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181619', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -1134,7 +1198,7 @@ async function transformStems(semi, tempo, stems = E.stems, progress = null) {
 }
 function syncXform() {
   const x = S.xform[current?.id] || { semi: 0, tempo: 1 };
-  $('#xSemi').value = x.semi; $('#xTempo').value = Math.round(x.tempo * 100); $('#xTempoVal').textContent = Math.round(x.tempo * 100) + '%';
+  $('#xSemi').value = x.semi; $('#xTempo').value = Math.round(x.tempo * 100); $('#xTempoVal').textContent = Math.round(x.tempo * 100) + '%'; syncSemiLabel(); paintRange(); renderEditHeader();
 }
 for (let i = -6; i <= 6; i++) $('#xSemi').append(new Option(i > 0 ? '+' + i : String(i), i));
 $('#xSemi').value = 0;
@@ -1379,7 +1443,7 @@ $('#nsTap').onclick = () => {
 KEYS.forEach((k) => $('#nsKey').append(new Option(k, k)));
 // pad per song (for any song, with or without playback)
 KEYS.forEach((k) => $('#songPadKey').append(new Option(k, k)));
-function renderSongPad() { const sp = S.songPad[E.song?.id] || {}; $('#songPadKey').value = sp.key || ''; $('#songPadAuto').checked = !!sp.auto; $('#btnClickSettings').hidden = E.song?.src !== 'click'; }
+function renderSongPad() { const sp = S.songPad[E.song?.id] || {}; $('#songPadKey').value = sp.key || ''; $('#songPadAuto').checked = !!sp.auto; $('#btnClickSettings').hidden = E.song?.src !== 'click'; syncPadGrid(); renderEditHeader(); }
 const saveSongPad = () => {
   if (!E.song || guardLock()) return; const key = $('#songPadKey').value;
   if (key) S.songPad[E.song.id] = { key, auto: $('#songPadAuto').checked }; else delete S.songPad[E.song.id]; save('songPad');
