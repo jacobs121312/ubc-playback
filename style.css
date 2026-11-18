@@ -67,3 +67,13 @@ p.hint{max-width:640px}
 #markers button{padding:3px 10px;font-size:12px}
 #report{flex-basis:100%;color:var(--warn);font-size:12px}
 #report ul{margin:6px 0 0;padding-left:18px;color:var(--dim)}
+#markers button.cur{background:#16324f;border-color:var(--acc)}
+#markers button.queued{border-color:var(--warn);color:var(--warn)}
+#btnLoop.on{background:var(--ok);border-color:var(--ok);color:#04150d}
+#extra button{padding:3px 10px;font-size:12px}
+.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--dim)}
+.chk input{width:auto}
+select.inline{width:auto}
+.padkeys{display:grid;grid-template-columns:repeat(6,64px);gap:8px;margin:12px 0 16px}
+.padkeys button{height:56px;font-size:16px;font-weight:600}
+.list li button.up,.list li button.dn{padding:1px 6px;font-size:10px}

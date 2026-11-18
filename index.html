@@ -12,6 +12,7 @@
   <nav id="tabs">
     <button data-tab="mixer" class="on">Мікшер</button>
     <button data-tab="patch">Патч</button>
+    <button data-tab="pads">Пади</button>
     <button data-tab="settings">Налаштування</button>
   </nav>
   <div id="status" class="status"></div>
@@ -49,6 +50,14 @@
 
     <div id="extra">
       <div id="markers"></div>
+      <button id="btnLoop" title="Зациклити поточну секцію (без пауз)">∞ Loop секції</button>
+      <button id="btnMark" title="Додати мітку секції в поточній позиції">＋ Секція</button>
+      <button id="btnStartHere" title="Пісня стартуватиме звідси">⇤ Старт тут</button>
+      <button id="btnEndHere" title="Пісня закінчиться тут">⇥ Кінець тут</button>
+      <button id="btnClearTrim" title="Скинути початок/кінець">✕ обрізка</button>
+      <small id="trimInfo"></small>
+      <label class="chk"><input type="checkbox" id="chkAuto"> Авто-перехід</label>
+      <button id="btnFade" title="Плавно затухнути за 3 с і зупинити">Fade out</button>
       <button id="btnExport" title="Зберегти стеми як WAV у папку (напр. синхронізовану з Drive)">⬇ Експорт стемів</button>
       <details id="report" hidden><summary></summary><ul></ul></details>
     </div>
@@ -58,9 +67,25 @@
         <button id="patchAuto">Авто-патч (пари підряд)</button>
         <button id="patchMain">Усе на 1–2</button>
         <button id="patchClear">Очистити</button>
+        <button id="patchSmart" title="Click → вихід 3, Guide → вихід 4, решта → 1–2">Smart (Click/Guide окремо)</button>
+        <select id="presetSel" class="inline"></select>
+        <button id="presetSave">Зберегти пресет</button>
+        <button id="presetLoad">Застосувати</button>
+        <button id="presetDel">Видалити</button>
         <span class="hint">Клік по заголовку виходу — тестовий тон. Патч запам'ятовується за назвою стему для всіх пісень.</span>
       </div>
       <div id="matrix" class="matrix-wrap"></div>
+    </section>
+    <section id="tab-pads" class="tab" hidden>
+      <h3>Ambient-пади</h3>
+      <p class="hint">Грають незалежно від пісні й мають власні виходи. Натисніть тональність — плавний вхід; ще раз — плавний вихід.</p>
+      <div id="padKeys" class="padkeys"></div>
+      <div class="form">
+        <label>Вихід L <select id="padL"></select></label>
+        <label>Вихід R <select id="padR"></select></label>
+        <label>Гучність <input id="padVol" type="range" min="0" max="1" step="0.01"></label>
+        <button id="padStop">■ Зупинити пад</button>
+      </div>
     </section>
     <section id="tab-settings" class="tab" hidden>
       <h3>Аудіовихід (Dante)</h3>
@@ -75,6 +100,10 @@
         <div id="deviceInfo" class="hint"></div>
       </div>
       <p class="hint">Встановіть <b>Dante Virtual Soundcard</b> (Mac/Win), у системі оберіть її як вихід, у Chrome — теж. Канали DVS (до 64) з'являться тут як виходи; підписки DVS → пульт робляться в Dante Controller. Sample rate DVS має бути 48 kHz.</p>
+
+      <h3>MIDI-пульт</h3>
+      <div class="form"><button id="btnMidi">Увімкнути MIDI</button><div id="midiInfo" class="hint"></div></div>
+      <p class="hint">Ноти: 60 Play/Pause · 61 Stop · 62 наступна пісня · 63 попередня · 64 наступна секція · 65 Loop · 66 Fade out. Клавіші: Space, → наступна секція, ← на початок.</p>
 
       <h3>Google Drive</h3>
       <div class="form">

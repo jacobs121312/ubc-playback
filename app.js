@@ -10,6 +10,9 @@ const S = {
   deviceId: store.get('deviceId', ''), outCount: store.get('outCount', 0),
   patch: store.get('patch', {}), outNames: store.get('outNames', []), setlist: store.get('setlist', []),
   index: store.get('index', {}),
+  markers: store.get('markers', {}), trim: store.get('trim', {}), mix: store.get('mix', {}),
+  presets: store.get('presets', {}), pad: store.get('pad', { out: [0, 1], vol: 0.5, key: 'C' }),
+  autoAdvance: store.get('autoAdvance', true),
 };
 const save = (k) => store.set(k, S[k]);
 const status = (t) => { $('#status').textContent = t; };
@@ -70,12 +73,30 @@ function setPatch(name, routes) {
   E.stems.filter((s) => key(s.name) === key(name)).forEach(applyRoutes);
 }
 
-function position() { return E.playing ? Math.min(E.ctx.currentTime - E.startedAt, E.dur) : E.pos; }
-async function play() {
+const trimOf = () => S.trim[E.song?.id] || {};
+const startPos = () => trimOf().start || 0;
+const endPos = () => Math.min(trimOf().end || E.dur, E.dur);
+function position() {
+  if (E.pendingJump && E.ctx.currentTime >= E.pendingJump.tb) { E.startedAt = E.pendingJump.tb - E.pendingJump.target; E.pendingJump = null; }
+  return E.playing ? Math.min(E.ctx.currentTime - E.startedAt, E.dur) : E.pos;
+}
+// Sample-accurate jump: old sources stop at song position `at`, new ones start there from `target` (gapless section loops/queues).
+function jumpAt(at, target) {
+  const tb = E.startedAt + at;
+  E.sources.forEach((s) => { try { s.stop(tb); } catch {} });
+  E.sources.push(...E.stems.flatMap((st) => schedule(E.ctx, st, st.g, tb, target)));
+  E.pendingJump = { tb, target };
+}
+function sections() {
+  const m = E.markers; if (!m.length) return [];
+  return m.map((x, i) => ({ name: x.name, start: x.t, end: i + 1 < m.length ? m[i + 1].t : E.dur }));
+}
+const sectionAt = (p) => sections().find((s) => p >= s.start - 0.001 && p < s.end - 0.001);
+async function play(lead = 0.12) {
   if (!E.stems.length || E.playing) return;
   await E.ctx.resume();
-  const t0 = E.ctx.currentTime + 0.12;
-  if (E.pos >= E.dur - 0.05) E.pos = 0;
+  const t0 = E.ctx.currentTime + lead;
+  if (E.pos >= endPos() - 0.05) E.pos = startPos();
   E.sources = E.stems.flatMap((st) => schedule(E.ctx, st, st.g, t0, E.pos));
   E.startedAt = t0 - E.pos; E.playing = true;
   syncPlayBtn();
@@ -99,13 +120,31 @@ function schedule(ctx, st, dest, t0, pos) {
   }
   return out;
 }
-setInterval(() => {          // end-of-song detection (works even if tab is in background)
-  if (E.playing && position() >= E.dur - 0.05) { stop(); advance(1, true); }
-}, 200);
+setInterval(() => {          // scheduler: queued/looped section jumps + end of song (works in background tab)
+  if (!E.playing) return;
+  const p = position();
+  if (!E.pendingJump) {
+    const sec = sectionAt(p);
+    const target = E.queue ?? (E.loop && sec ? sec.start : null);
+    const endT = sec ? sec.end : endPos();
+    if (target != null && endT - p < 0.3 && endT - p > -0.05) {
+      jumpAt(endT, target);
+      if (E.queue != null) { E.queue = null; renderMarkers(); }
+      return;
+    }
+  }
+  if (p >= endPos() - 0.05 && !E.pendingJump) { stop(); if (S.autoAdvance) advance(1, true); }
+}, 25);
 function halt() { E.sources.forEach((s) => { s.onended = null; try { s.stop(); } catch {} }); E.sources = []; }
 function pause() { if (!E.playing) return; E.pos = position(); halt(); E.playing = false; syncPlayBtn(); }
-function stop() { halt(); E.playing = false; E.pos = 0; syncPlayBtn(); }
-function seek(t) { const was = E.playing; if (was) { halt(); E.playing = false; } E.pos = t; if (was) play(); }
+function stop() { halt(); E.playing = false; E.pendingJump = null; E.queue = null; E.pos = startPos(); syncPlayBtn(); }
+function seek(t) { const was = E.playing; if (was) { halt(); E.playing = false; E.pendingJump = null; } E.pos = t; if (was) play(0.03); }
+function fadeOutStop(sec = 3) {
+  if (!E.playing) return;
+  const g = E.master.gain, t = E.ctx.currentTime;
+  g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + sec);
+  setTimeout(() => { stop(); g.cancelScheduledValues(E.ctx.currentTime); g.setValueAtTime(E.masterVol, E.ctx.currentTime); }, sec * 1000 + 50);
+}
 const syncPlayBtn = () => { $('#btnPlay').textContent = E.playing ? '❚❚' : '▶'; };
 
 function testTone(ch) {
@@ -259,13 +298,15 @@ async function loadSong(song) {
     if (current !== song) return;
     let extra = { markers: [], warnings: [], tempo: 0, dur: 0 };
     if (!Array.isArray(items)) { extra = items; items = items.stems; }
-    E.song = song; E.pos = 0;
+    E.song = song; E.queue = null; E.loop = false; $('#btnLoop').classList.remove('on');
+    const saved = S.mix[song.id] || {};
     E.stems = items.map((it) => {
       const segs = it.segs || [{ t: 0, d: it.buffer.duration, off: 0, rate: 1, buffer: it.buffer }];
-      return { ...it, segs, channels: it.channels || segs[0].buffer.numberOfChannels, vol: it.vol ?? 1, mute: it.mute ?? false, solo: false };
+      const sv = saved[key(it.name)];
+      return { ...it, segs, channels: it.channels || segs[0].buffer.numberOfChannels, vol: sv?.vol ?? it.vol ?? 1, mute: sv?.mute ?? it.mute ?? false, solo: false };
     });
     E.dur = extra.dur || Math.max(...E.stems.flatMap((s) => s.segs.map((g) => g.t + g.d)));
-    E.markers = extra.markers || [];
+    E.ablMarkers = extra.markers || []; rebuildMarkers(); E.pos = startPos(); showTrim();
     E.stems.forEach(buildStemNodes);
     $('#songMeta').textContent = `${E.stems.length} стемів · ${fmt(E.dur)}` + (extra.tempo ? ` · ${extra.tempo} BPM` : '');
     renderMarkers(); renderReport(extra.warnings || []);
@@ -297,9 +338,11 @@ function renderSetlist() {
   S.setlist.forEach((id, i) => {
     const s = library.find((x) => x.id === id); if (!s) return;
     const li = document.createElement('li'); if (s === current) li.className = 'cur';
-    li.innerHTML = `<small>${i + 1}</small><span></span><button>✕</button>`; li.querySelector('span').textContent = s.name;
+    li.innerHTML = `<small>${i + 1}</small><span></span><button class="up">▲</button><button class="dn">▼</button><button class="rm">✕</button>`; li.querySelector('span').textContent = s.name;
     li.onclick = () => loadSong(s);
-    li.querySelector('button').onclick = (e) => { e.stopPropagation(); S.setlist.splice(i, 1); save('setlist'); renderSetlist(); };
+    const mv = (d) => (e) => { e.stopPropagation(); const j = i + d; if (j < 0 || j >= S.setlist.length) return; [S.setlist[i], S.setlist[j]] = [S.setlist[j], S.setlist[i]]; save('setlist'); renderSetlist(); };
+    li.querySelector('.up').onclick = mv(-1); li.querySelector('.dn').onclick = mv(1);
+    li.querySelector('.rm').onclick = (e) => { e.stopPropagation(); S.setlist.splice(i, 1); save('setlist'); renderSetlist(); };
     ul.append(li);
   });
 }
@@ -312,9 +355,9 @@ function renderMixer() {
       <div class="fader"><input type="range" min="0" max="1.5" step="0.01"><div class="meter"><i></i></div></div>
       <div class="ms"><button class="m">M</button><button class="s">S</button></div>`;
     $('.nm', el).textContent = st.name; $('.rt', el).textContent = routeLabel(st);
-    const f = $('input', el); f.value = st.vol; f.oninput = () => { st.vol = +f.value; applyGain(st); };
-    f.ondblclick = () => { f.value = st.vol = 1; applyGain(st); };
-    $('.m', el).onclick = (e) => { st.mute = !st.mute; e.target.classList.toggle('on', st.mute); applyGain(st); };
+    const f = $('input', el); f.value = st.vol; f.oninput = () => { st.vol = +f.value; applyGain(st); saveMix(); };
+    f.ondblclick = () => { f.value = st.vol = 1; applyGain(st); saveMix(); };
+    $('.m', el).onclick = (e) => { st.mute = !st.mute; e.target.classList.toggle('on', st.mute); applyGain(st); saveMix(); };
     $('.s', el).onclick = (e) => { st.solo = !st.solo; e.target.classList.toggle('on', st.solo); E.stems.forEach(applyGain); };
     $('.m', el).classList.toggle('on', st.mute); f.value = st.vol;
     st.meter = $('.meter i', el); st.rt = $('.rt', el); box.append(el);
@@ -351,12 +394,35 @@ function patchAll(fn) {
   renderMatrix(); renderMixer();
 }
 
+function rebuildMarkers() {
+  const mine = (S.markers[E.song?.id] || []);
+  E.markers = [...(E.ablMarkers || []), ...mine].sort((a, b) => a.t - b.t);
+  renderMarkers();
+}
 function renderMarkers() {
   const box = $('#markers'); box.innerHTML = '';
-  E.markers.forEach((m) => {
-    const b = document.createElement('button'); b.textContent = `${m.name || '•'} · ${fmt(m.t)}`;
-    b.onclick = () => seek(m.t); box.append(b);
+  E.markers.forEach((m, i) => {
+    const b = document.createElement('button'); b.textContent = `${m.name || '•'} · ${fmt(m.t)}`; b.dataset.i = i;
+    if (E.queue === m.t) b.classList.add('queued');
+    b.title = 'Клік — перейти в кінці поточної секції; подвійний клік — одразу; ПКМ — видалити свою мітку';
+    b.onclick = () => { if (E.playing) { E.queue = m.t; renderMarkers(); } else seek(m.t); };
+    b.ondblclick = () => { E.queue = null; seek(m.t); renderMarkers(); };
+    b.oncontextmenu = (e) => {
+      e.preventDefault(); const mine = S.markers[E.song.id] || []; const k = mine.findIndex((x) => x.t === m.t && x.name === m.name);
+      if (k >= 0) { mine.splice(k, 1); S.markers[E.song.id] = mine; save('markers'); rebuildMarkers(); }
+    };
+    box.append(b);
   });
+}
+function markCurrentSection() {
+  if (!E.song) return;
+  const name = prompt('Назва секції (Verse, Chorus, Bridge…)', ''); if (name === null) return;
+  const m = S.markers[E.song.id] ||= []; m.push({ t: Math.round(position() * 100) / 100, name: name.trim() });
+  save('markers'); rebuildMarkers();
+}
+function saveMix() {
+  if (!E.song) return;
+  S.mix[E.song.id] = Object.fromEntries(E.stems.map((s) => [key(s.name), { vol: s.vol, mute: s.mute }])); save('mix');
 }
 function renderReport(w) {
   const d = $('#report'); d.hidden = !w.length;
@@ -421,6 +487,7 @@ function selectTab(t) {
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
   document.querySelectorAll('.tab').forEach((s) => { s.hidden = s.id !== 'tab-' + t; });
   if (t === 'patch') renderMatrix();
+  if (t === 'pads') renderPads();
 }
 
 async function fillDevices() {
@@ -443,6 +510,8 @@ function tick() {
   if (E.stems.length) {
     const p = position(); $('#time').textContent = `${fmt(p)} / ${fmt(E.dur)}`;
     if (!seeking) $('#seek').value = E.dur ? (p / E.dur) * 1000 : 0;
+    const cs = sectionAt(p), ci = cs ? E.markers.findIndex((m) => m.t === cs.start) : -1;
+    document.querySelectorAll('#markers button').forEach((b) => b.classList.toggle('cur', +b.dataset.i === ci));
     E.stems.forEach((st) => {
       if (!st.meter || !st.an) return;
       st.an.getFloatTimeDomainData(st.data);
@@ -480,6 +549,106 @@ $('#btnPickDevice').onclick = async () => {
 $('#clientId').value = S.clientId; $('#rootFolder').value = S.rootFolder;
 $('#btnSaveDrive').onclick = () => { S.clientId = $('#clientId').value.trim(); S.rootFolder = $('#rootFolder').value.trim(); save('clientId'); save('rootFolder'); status('Збережено'); };
 addEventListener('keydown', (e) => { if (e.code === 'Space' && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) { e.preventDefault(); E.playing ? pause() : play(); } });
+
+// ── Section / trim / transport extras ──
+$('#btnLoop').onclick = () => { E.loop = !E.loop; $('#btnLoop').classList.toggle('on', E.loop); };
+$('#btnMark').onclick = markCurrentSection;
+function nextSection() {
+  const s = sections(); if (!s.length) return;
+  const i = s.findIndex((x) => x === sectionAt(position())); const nx = s[i + 1];
+  if (!nx) return; if (E.playing) { E.queue = nx.start; renderMarkers(); } else seek(nx.start);
+}
+const setTrim = (patch) => { if (!E.song) return; S.trim[E.song.id] = { ...trimOf(), ...patch }; save('trim'); showTrim(); };
+function showTrim() { const t = trimOf(); $('#trimInfo').textContent = t.start || t.end ? `обрізка: ${fmt(t.start || 0)}–${fmt(t.end || E.dur)}` : ''; }
+$('#btnStartHere').onclick = () => setTrim({ start: Math.round(position() * 100) / 100 });
+$('#btnEndHere').onclick = () => setTrim({ end: Math.round(position() * 100) / 100 });
+$('#btnClearTrim').onclick = () => { if (E.song) { delete S.trim[E.song.id]; save('trim'); showTrim(); } };
+$('#chkAuto').checked = S.autoAdvance; $('#chkAuto').onchange = (e) => { S.autoAdvance = e.target.checked; save('autoAdvance'); };
+$('#btnFade').onclick = () => fadeOutStop(3);
+
+// ── Routing presets + smart routing ──
+function renderPresets(sel) {
+  const el = $('#presetSel'); el.innerHTML = '<option value="">— пресет —</option>';
+  Object.keys(S.presets).forEach((n) => el.append(new Option(n, n))); if (sel) el.value = sel;
+}
+$('#presetSave').onclick = () => {
+  const n = prompt('Назва пресету (наприклад «Основний зал», «IEM»)', $('#presetSel').value || ''); if (!n) return;
+  S.presets[n] = JSON.parse(JSON.stringify(S.patch)); save('presets'); renderPresets(n);
+};
+$('#presetLoad').onclick = () => {
+  const p = S.presets[$('#presetSel').value]; if (!p) return;
+  S.patch = JSON.parse(JSON.stringify(p)); save('patch'); E.stems.forEach(applyRoutes); renderMatrix(); renderMixer();
+};
+$('#presetDel').onclick = () => { const n = $('#presetSel').value; if (n && confirm(`Видалити пресет «${n}»?`)) { delete S.presets[n]; save('presets'); renderPresets(); } };
+$('#patchSmart').onclick = () => {
+  if (E.nOut < 4) status('Для Smart-патчу потрібно ≥4 виходи (Click → 3, Guide → 4, решта → 1–2)');
+  patchAll((st) => (E.nOut >= 4 && /click|metronome|метроном/i.test(st.name) ? [2] : E.nOut >= 4 && /guide|cue|гайд/i.test(st.name) ? [3] : [0, 1]));
+};
+renderPresets();
+
+// ── Ambient pads (synth, independent of the song, own outputs) ──
+const KEYS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const P = { ctx: null, bus: null, split: null, voice: null };
+function padEnsure() {
+  if (P.ctx === E.ctx && P.bus) return;
+  P.ctx = E.ctx; P.voice = null;
+  P.bus = E.ctx.createGain(); Object.assign(P.bus, { channelCount: 2, channelCountMode: 'explicit' });
+  P.split = E.ctx.createChannelSplitter(2); P.bus.connect(P.split); padRoute(); P.bus.gain.value = S.pad.vol;
+}
+function padRoute() {
+  if (!P.split) return; P.split.disconnect();
+  S.pad.out.forEach((o, i) => { if (o != null && o >= 0 && o < E.nOut) P.split.connect(E.merger, i, o); });
+}
+function padStop(fade = 3) {
+  const v = P.voice; if (!v) return; P.voice = null;
+  const t = E.ctx.currentTime; v.g.gain.cancelScheduledValues(t); v.g.gain.setValueAtTime(v.g.gain.value, t); v.g.gain.linearRampToValueAtTime(0, t + fade);
+  v.oscs.forEach((o) => o.stop(t + fade + 0.1)); setTimeout(() => v.g.disconnect(), (fade + 0.3) * 1000);
+}
+function padStart(k, fade = 3) {
+  padEnsure(); E.ctx.resume();
+  if (P.voice?.key === k) { padStop(fade); renderPads(); return; }
+  padStop(fade);
+  const ctx = E.ctx, f = 130.81 * 2 ** (KEYS.indexOf(k) / 12);
+  const g = ctx.createGain(); g.gain.value = 0; const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1300; g.connect(lp); lp.connect(P.bus);
+  const oscs = [];
+  [[f / 2, 0], [f, -0.6], [f * 1.5, 0.6], [f * 2, -0.3], [f * 3, 0.4]].forEach(([fr, pan], i) => [-7, 7].forEach((det, j) => {
+    const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = fr; o.detune.value = det;
+    const p = ctx.createStereoPanner(); p.pan.value = pan * (j ? -1 : 1); const og = ctx.createGain(); og.gain.value = 0.1 / (1 + i * 0.3);
+    o.connect(og); og.connect(p); p.connect(g); o.start(); oscs.push(o);
+  }));
+  const t = ctx.currentTime; g.gain.linearRampToValueAtTime(1, t + fade);
+  P.voice = { key: k, g, oscs }; renderPads();
+}
+function renderPads() {
+  const box = $('#padKeys'); box.innerHTML = '';
+  KEYS.forEach((k) => { const b = document.createElement('button'); b.textContent = k; b.classList.toggle('on', P.voice?.key === k); b.onclick = () => padStart(k); box.append(b); });
+  ['padL', 'padR'].forEach((id, i) => {
+    const s = $('#' + id); s.innerHTML = '<option value="-1">—</option>';
+    for (let c = 0; c < E.nOut; c++) s.append(new Option(`${c + 1}${S.outNames[c] ? ' ' + S.outNames[c] : ''}`, c));
+    s.value = S.pad.out[i] ?? -1; s.onchange = () => { S.pad.out[i] = +s.value; save('pad'); padRoute(); };
+  });
+  $('#padVol').value = S.pad.vol;
+}
+$('#padVol').oninput = (e) => { S.pad.vol = +e.target.value; save('pad'); if (P.bus) P.bus.gain.value = S.pad.vol; };
+$('#padStop').onclick = () => { padStop(3); renderPads(); };
+
+// ── MIDI remote (Web MIDI notes) ──
+const MIDI_MAP = { 60: () => (E.playing ? pause() : play()), 61: () => stop(), 62: () => advance(1), 63: () => advance(-1), 64: nextSection, 65: () => $('#btnLoop').click(), 66: () => fadeOutStop(3) };
+function midiMsg(e) { const [s, n, v] = e.data; if ((s & 0xf0) === 0x90 && v) MIDI_MAP[n]?.(); }
+$('#btnMidi').onclick = async () => {
+  if (!navigator.requestMIDIAccess) return ($('#midiInfo').textContent = 'Web MIDI недоступний в цьому браузері');
+  try {
+    const a = await navigator.requestMIDIAccess();
+    const hook = () => { const ins = [...a.inputs.values()]; ins.forEach((i) => (i.onmidimessage = midiMsg)); $('#midiInfo').textContent = ins.length ? 'MIDI входи: ' + ins.map((i) => i.name).join(', ') : 'MIDI-пристроїв не знайдено'; };
+    hook(); a.onstatechange = hook;
+  } catch (e) { $('#midiInfo').textContent = 'MIDI: ' + e.message; }
+};
+
+addEventListener('keydown', (e) => {
+  if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  if (e.code === 'ArrowRight') nextSection();
+  if (e.code === 'ArrowLeft') seek(startPos());
+});
 
 offlineDrive(); renderLibrary(); renderSetlist();
 await initAudio(); await fillDevices(); tick();
