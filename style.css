@@ -131,3 +131,10 @@ select.inline{width:auto}
 .srow .st{font-size:11px;color:var(--dim);min-width:118px;font-variant-numeric:tabular-nums}
 .srow button{padding:1px 7px;font-size:12px}
 .card .art i{cursor:pointer;padding:0 4px}
+#selbar{position:absolute;right:10px;top:8px;z-index:6;display:flex;gap:8px;align-items:center;background:rgba(12,13,16,.92);border:1px solid var(--acc);border-radius:10px;padding:5px 8px;font-size:12px}
+#selbar button{padding:3px 10px;font-size:12px}
+#selDel{background:var(--bad);border-color:var(--bad);color:#fff}
+.sec.sel .bg{opacity:.4}
+.sec.sel{outline:2px solid #fff;outline-offset:-2px}
+.srow.sel{outline:1px solid var(--acc);background:#10382f}
+.srow .ck{width:auto}

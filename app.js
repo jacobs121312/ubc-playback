@@ -1,6 +1,6 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { detectSections } from './guide.js?v=202611181423';
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181423';
+import { detectSections } from './guide.js?v=202611181439';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181439';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -13,6 +13,7 @@ const S = {
   index: store.get('index', {}),
   markers: store.get('markers', {}), trim: store.get('trim', {}), mix: store.get('mix', {}),
   presets: store.get('presets', {}), pad: store.get('pad', { out: [0, 1], vol: 0.5, key: 'C' }),
+  ver: store.get('ver', {}), pinned: store.get('pinned', {}),
   arr: store.get('arr', {}), trans: store.get('trans', {}), autoDetect: store.get('autoDetect', true),
   autoAdvance: store.get('autoAdvance', true), preload: store.get('preload', false), xform: store.get('xform', {}),
 };
@@ -22,7 +23,7 @@ const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
 const key = (n) => n.trim().toLowerCase();
 
 // ───────────── Audio engine ─────────────
-const E = { tempo: 1, markers: [], ctx: null, merger: null, master: null, nOut: 2, maxOut: 2, stems: [], song: null,
+const E = { sel: new Set(), lastSel: null, tempo: 1, markers: [], ctx: null, merger: null, master: null, nOut: 2, maxOut: 2, stems: [], song: null,
   playing: false, pos: 0, startedAt: 0, sources: [], dur: 0, masterVol: 1 };
 
 async function initAudio() {
@@ -261,6 +262,7 @@ async function connectDrive() {
     prefetch: async () => { for (const x of await driveStemFiles(f.id)) await driveBuf(x); },
   })));
   renderLibrary(); status(`Drive: ${folders.length} пісень`);
+  syncDriveVersions(folderId(S.rootFolder));
 }
 function offlineDrive() {       // show cached Drive songs without login
   const folders = store.get('driveSongs', []);
@@ -319,7 +321,10 @@ function preloadNext() {
   for (const k of [...decoded.keys()]) if (!keep.has(k)) decoded.delete(k);
   if (S.preload && nx && nx.src !== 'demo' && !decoded.has(nx.id)) getItems(nx, true).catch(() => {});
 }
-async function loadSong(song, xf = S.xform[song.id]) {
+async function loadSong(song, xf) {
+  const pv = pinnedVersion(song.id);
+  if (pv && xf === undefined) restoreState(song.id, pv);          // pinned: always the saved Sunday version
+  if (xf === undefined) xf = S.xform[song.id];
   stop(); current = song; E.loading = true; renderLibrary(); renderSetlist();
   $('#songName').textContent = song.name; $('#songMeta').textContent = 'завантаження…';
   try {
@@ -346,7 +351,7 @@ async function loadSong(song, xf = S.xform[song.id]) {
     E.stems.forEach(buildStemNodes);
     $('#songMeta').textContent = `${E.stems.length} стемів · ${fmt(E.dur)}` + (extra.tempo ? ` · ${extra.tempo} BPM` : '');
     renderMarkers(); renderReport(extra.warnings || []);
-    syncXform(); renderMixer(); renderMatrix();
+    syncXform(); renderMixer(); renderMatrix(); renderVersions();
     const dl = NET.downloaded - n0.downloaded, ca = NET.cached - n0.cached;
     status(hadMem ? 'Готово (з пам\'яті)' : dl ? `Готово · завантажено з Drive: ${dl} файлів, ${(((NET.bytes - n0.bytes)) / 1048576).toFixed(0)} МБ` : ca ? `Готово · з локального кешу (${ca} файлів)` : 'Готово');
     preloadNext();
@@ -473,7 +478,7 @@ function mergeSegs(list) {
   return out;
 }
 function rebuildMarkers() {
-  if (!E.song) return;
+  if (!E.song) return; E.sel.clear(); E.lastSel = null;
   const arr = S.arr[E.song.id], T = E.tempo;
   if (arr && arr.length) {
     let V = 0;
@@ -498,6 +503,7 @@ function rebuildMarkers() {
 }
 const arrHist = [];
 function commitArr(arr, { soft = false } = {}) {
+  if (guardLock()) return;
   const id = E.song.id; arrHist.push(JSON.stringify(S.arr[id] ?? null)); if (arrHist.length > 60) arrHist.shift();
   if (arr) S.arr[id] = arr; else delete S.arr[id];
   save('arr');
@@ -506,13 +512,14 @@ function commitArr(arr, { soft = false } = {}) {
   rebuildMarkers();
 }
 function undoArr() {
+  if (guardLock()) return;
   if (!arrHist.length || !E.song) return status('Нічого скасовувати');
   const prev = JSON.parse(arrHist.pop()); const id = E.song.id;
   if (prev) S.arr[id] = prev; else delete S.arr[id];
   save('arr'); if (E.playing || E.pos) stop(); rebuildMarkers(); status('Скасовано');
 }
 const curArr = () => (S.arr[E.song?.id] ? S.arr[E.song.id].map((x) => ({ ...x })) : baseSections());
-function opDelete(i) { const a = curArr(); if (a.length <= 1) return status('Не можна видалити останню секцію'); const [r] = a.splice(i, 1); commitArr(a); status(`Видалено «${r.name || 'секція'}» · скасувати: EDIT → ↶ або Cmd+Z`); }
+function opDelete(i) { if (guardLock()) return; const a = curArr(); if (a.length <= 1) return status('Не можна видалити останню секцію'); const [r] = a.splice(i, 1); commitArr(a); status(`Видалено «${r.name || 'секція'}» · скасувати: EDIT → ↶ або Cmd+Z`); }
 function opDup(i) { const a = curArr(); a.splice(i + 1, 0, { ...a[i] }); commitArr(a); }
 function opMove(i, d) { const a = curArr(), j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; commitArr(a); }
 function opRename(i, name) { const a = curArr(); a[i].name = name; commitArr(a, { soft: true }); }
@@ -541,15 +548,17 @@ function resetStructure() { if (!E.song) return; if (!S.arr[E.song.id]) return s
 
 function renderStructure() {
   const box = $('#structList'); if (!box) return;
-  box.innerHTML = '';
+  box.innerHTML = ''; E.sel.forEach((i) => { if (i >= E.markers.length) E.sel.delete(i); });
   if (!E.markers.length) { box.innerHTML = '<p class="hint">Секцій ще немає. Натисніть «Визначити по Guide» або «＋ Секція тут».</p>'; return; }
   E.markers.forEach((m, i) => {
     const next = E.markers[i + 1] ? E.markers[i + 1].t : E.dur, info = secInfo(m.name);
     const row = document.createElement('div'); row.className = 'srow';
-    row.innerHTML = `<span class="sb"></span><input class="sn" placeholder="назва"><span class="st"></span>
+    row.innerHTML = `<input type="checkbox" class="ck" title="Вибрати (Shift — діапазон)"><span class="sb"></span><input class="sn" placeholder="назва"><span class="st"></span>
       <button class="go" title="Перейти">▶</button><button class="up" title="Вгору">▲</button><button class="dn" title="Вниз">▼</button>
       <button class="dup" title="Дублювати (повторити секцію)">⧉</button><button class="ss" title="Початок секції = позиція курсору">⇤</button>
       <button class="mg" title="Об’єднати з наступною">⤵</button><button class="del" title="Видалити секцію">✕</button>`;
+    $('.ck', row).onclick = (e) => { e.stopPropagation(); if (e.shiftKey && E.lastSel != null) selectSection(i, e); else { E.sel.has(i) ? E.sel.delete(i) : E.sel.add(i); E.lastSel = i; refreshSel(); } };
+    if (E.sel.has(i)) row.classList.add('sel');
     const sb = $('.sb', row); sb.textContent = info.code; sb.style.setProperty('--c', info.color);
     const inp = $('.sn', row); inp.value = m.name; inp.onchange = () => opRename(i, inp.value.trim());
     $('.st', row).textContent = `${fmt(m.t)}–${fmt(next)} (${fmt(next - m.t)})`;
@@ -559,7 +568,125 @@ function renderStructure() {
     $('.mg', row).onclick = () => opMergeNext(i); $('.del', row).onclick = () => opDelete(i);
     box.append(row);
   });
+  refreshSel();
 }
+
+// ── Multi-select of sections (Shift = range, Ctrl/Cmd = toggle) ──
+const locked = () => !!S.pinned[E.song?.id];
+function guardLock() { if (locked()) { status('🔒 Пісню закріплено (версія «' + (S.ver[E.song.id]?.main || '') + '»). Зніміть закріплення в EDIT → «Версії», щоб змінювати'); return true; } return false; }
+function selectSection(i, e) {
+  if (e.shiftKey && E.lastSel != null) { const [a, b] = [Math.min(E.lastSel, i), Math.max(E.lastSel, i)]; for (let k = a; k <= b; k++) E.sel.add(k); }
+  else if (e.metaKey || e.ctrlKey || E.sel.size) { E.sel.has(i) ? E.sel.delete(i) : E.sel.add(i); E.lastSel = i; }
+  else { E.sel.add(i); E.lastSel = i; }
+  refreshSel();
+}
+function clearSel() { E.sel.clear(); E.lastSel = null; refreshSel(); }
+function refreshSel() {
+  document.querySelectorAll('#sections .sec').forEach((el, i) => el.classList.toggle('sel', E.sel.has(i)));
+  document.querySelectorAll('#structList .srow').forEach((el, i) => { el.classList.toggle('sel', E.sel.has(i)); const c = $('.ck', el); if (c) c.checked = E.sel.has(i); });
+  $('#selbar').hidden = !E.sel.size; $('#selInfo').textContent = `Вибрано секцій: ${E.sel.size}`;
+}
+function opDeleteMany(idx) {
+  if (guardLock()) return;
+  const set = new Set(idx); if (!set.size) return;
+  const a = curArr(); if (set.size >= a.length) return status('Не можна видалити всі секції');
+  const names = [...set].sort((x, y) => x - y).map((i) => a[i]?.name || 'секція');
+  commitArr(a.filter((_, i) => !set.has(i))); E.sel.clear(); E.lastSel = null; refreshSel();
+  status(`Видалено ${set.size}: ${names.join(', ')} · скасувати: Cmd+Z`);
+}
+$('#selDel').onclick = () => opDeleteMany([...E.sel]);
+$('#selClear').onclick = clearSel;
+addEventListener('keydown', (e) => {
+  if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  if ((e.code === 'Delete' || e.code === 'Backspace') && E.sel.size) { e.preventDefault(); opDeleteMany([...E.sel]); }
+  if (e.code === 'Escape' && E.sel.size) clearSel();
+  if ((e.metaKey || e.ctrlKey) && e.code === 'KeyA' && E.markers.length && !$('#overlay').hidden === false) { e.preventDefault(); E.markers.forEach((_, i) => E.sel.add(i)); refreshSel(); }
+});
+
+// ── Saved versions (what is played every Sunday), pinning, export/import, sharing via Drive ──
+function snapshot() {
+  const id = E.song.id;
+  return JSON.parse(JSON.stringify({ arr: S.arr[id] || null, markers: S.markers[id] || [], xform: S.xform[id] || null, mix: S.mix[id] || {}, trans: S.trans[id] || 'next', trim: S.trim[id] || null, savedAt: Date.now() }));
+}
+function restoreState(id, sn) {
+  const set = (k, v, empty) => { if (v == null || (empty && empty(v))) delete S[k][id]; else S[k][id] = JSON.parse(JSON.stringify(v)); save(k); };
+  set('arr', sn.arr); set('markers', sn.markers, (v) => !v.length); set('xform', sn.xform); set('mix', sn.mix, (v) => !Object.keys(v).length);
+  set('trans', sn.trans && sn.trans !== 'next' ? sn.trans : null); set('trim', sn.trim);
+}
+function pinnedVersion(id) { const v = S.ver[id]; return S.pinned[id] && v && v.list[v.main] ? v.list[v.main] : null; }
+function renderVersions() {
+  const sel = $('#verSel'); if (!sel) return;
+  const id = E.song?.id, v = (id && S.ver[id]) || { list: {}, main: null };
+  const prev = sel.value; sel.innerHTML = '<option value="">— збережені версії —</option>';
+  Object.entries(v.list).sort((a, b) => b[1].savedAt - a[1].savedAt).forEach(([n, sn]) => sel.append(new Option(`${v.main === n ? '★ ' : ''}${n} · ${new Date(sn.savedAt).toLocaleDateString('uk')}`, n)));
+  if (v.list[prev]) sel.value = prev; else if (v.main) sel.value = v.main;
+  $('#chkPin').checked = !!(id && S.pinned[id]);
+  $('#verInfo').textContent = !id ? '' : S.pinned[id] ? `🔒 Закріплено: щоразу відкривається версія «${v.main}»; зміни структури/тону заблоковані (гучності можна міняти під час служби — вони не зберігаються).` : Object.keys(v.list).length ? 'Версія не закріплена: відкривається останній робочий стан.' : 'Ще немає збережених версій.';
+}
+function saveVersion(name) {
+  if (!E.song) return; if (!name) { name = prompt('Назва версії (напр. «Неділя», «Різдво, G»):', 'Неділя'); if (!name) return; }
+  const v = S.ver[E.song.id] ||= { list: {}, main: null };
+  v.list[name] = snapshot(); if (!v.main) v.main = name; save('ver'); renderVersions(); $('#verSel').value = name; status(`Версію «${name}» збережено`);
+}
+$('#verSave').onclick = () => saveVersion();
+$('#verOverwrite').onclick = () => { const n = $('#verSel').value; if (n && confirm(`Перезаписати «${n}» поточним станом?`)) saveVersion(n); };
+$('#verApply').onclick = () => {
+  const id = E.song?.id, n = $('#verSel').value, sn = id && S.ver[id]?.list[n]; if (!sn) return;
+  if (locked()) return guardLock();
+  restoreState(id, sn); loadSong(E.song.src === 'demo' ? E.song : current, sn.xform || null); status(`Застосовано версію «${n}»`);
+};
+$('#verMain').onclick = () => { const id = E.song?.id, n = $('#verSel').value; if (!id || !n) return; S.ver[id].main = n; save('ver'); renderVersions(); status(`Основна версія: «${n}»`); };
+$('#verDelete').onclick = () => {
+  const id = E.song?.id, n = $('#verSel').value; if (!id || !n || !confirm(`Видалити версію «${n}»?`)) return;
+  const v = S.ver[id]; delete v.list[n]; if (v.main === n) { v.main = Object.keys(v.list)[0] || null; if (!v.main) delete S.pinned[id]; }
+  save('ver'); save('pinned'); renderVersions();
+};
+$('#chkPin').onchange = (e) => {
+  const id = E.song?.id; if (!id) { e.target.checked = false; return; }
+  if (e.target.checked) {
+    const v = S.ver[id]; if (!v || !v.main) saveVersion('Основна');
+    S.pinned[id] = true; save('pinned'); const sn = pinnedVersion(id);
+    if (sn) { restoreState(id, sn); loadSong(current, sn.xform || null); }
+  } else { delete S.pinned[id]; save('pinned'); }
+  renderVersions();
+};
+function exportData() { return { format: 'ubc-playback-versions', v: 1, exportedAt: Date.now(), ver: S.ver, pinned: S.pinned, songs: Object.fromEntries(library.map((l) => [l.id, l.name])) }; }
+function mergeVersions(d) {
+  if (!d || d.format !== 'ubc-playback-versions') throw new Error('Це не файл версій Playback');
+  let n = 0;
+  for (const [id, v] of Object.entries(d.ver || {})) {
+    const mine = S.ver[id] ||= { list: {}, main: v.main };
+    for (const [name, sn] of Object.entries(v.list || {})) if (!mine.list[name] || (sn.savedAt || 0) > (mine.list[name].savedAt || 0)) { mine.list[name] = sn; n++; }
+    if (!mine.main || !mine.list[mine.main]) mine.main = v.main;
+    else if (v.main && v.list[v.main] && (v.list[v.main].savedAt || 0) > (mine.list[mine.main].savedAt || 0)) mine.main = v.main;
+    if ((d.pinned || {})[id]) S.pinned[id] = true;
+  }
+  save('ver'); save('pinned'); return n;
+}
+$('#verExport').onclick = async () => {
+  const text = JSON.stringify(exportData(), null, 1);
+  try {
+    if (window.showSaveFilePicker) {
+      const h = await showSaveFilePicker({ suggestedName: 'playback-versions.json', types: [{ description: 'Playback versions', accept: { 'application/json': ['.json'] } }] });
+      const w = await h.createWritable(); await w.write(text); await w.close(); status('Версії збережено у файл');
+    } else { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' })); a.download = 'playback-versions.json'; a.click(); }
+  } catch (e) { if (e.name !== 'AbortError') status('Експорт: ' + e.message); }
+};
+$('#verImport').onclick = () => $('#verFile').click();
+$('#verFile').onchange = async (e) => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try { const n = mergeVersions(JSON.parse(await f.text())); renderVersions(); status(`Імпортовано версій: ${n}`); if (E.song && pinnedVersion(E.song.id)) loadSong(current); }
+  catch (err) { status('Імпорт: ' + err.message); }
+};
+async function syncDriveVersions(root) {            // playback-versions.json placed in the Drive playback folder is shared by all leaders
+  try {
+    const f = (await dList(`'${root}' in parents and name='playback-versions.json' and trashed=false and mimeType!='application/vnd.google-apps.folder'`, 'id,modifiedTime'))[0];
+    if (!f) return;
+    const d = await (await dFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`)).json();
+    store.set('driveVer', d); const n = mergeVersions(d); if (n) status(`З Drive підтягнуто версій: ${n}`);
+  } catch {}
+}
+{ const d = store.get('driveVer', null); if (d) { try { mergeVersions(d); } catch {} } }
 
 // ── Section detection from the Guide stem (whisper in a worker) ──
 const ASR = { w: null, ready: null, id: 0, pend: new Map() };
@@ -594,7 +721,7 @@ function guideSamples() {
   return x;
 }
 async function detectGuide(auto = false) {
-  if (!E.song || E.detecting) return;
+  if (!E.song || E.detecting || guardLock()) return;
   const x = guideSamples();
   if (!x) { if (!auto) status('Не знайшов стем Guide/Cue у цій пісні'); return; }
   const song = E.song; E.detecting = true; $('#btnDetect').disabled = true;
@@ -628,10 +755,19 @@ function renderMarkers() {
     el.style.cssText = `left:${(sc.start / E.dur) * 100}%;width:${((sc.end - sc.start) / E.dur) * 100}%;--c:${info.color}`;
     el.innerHTML = '<div class="bg"></div><div class="bar"></div><div class="badge"></div>';
     const b = $('.badge', el); b.textContent = info.code;
-    b.title = `${sc.name || 'секція'} · ${fmt(sc.start)}\nКлік — перейти в кінці поточної секції; подвійний клік — одразу; ПКМ — видалити секцію`;
-    b.onclick = (e) => { e.stopPropagation(); if (E.playing) { E.queue = sc.start; renderMarkers(); } else seek(sc.start); };
-    b.ondblclick = (e) => { e.stopPropagation(); E.queue = null; seek(sc.start); renderMarkers(); };
-    b.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); if (confirm(`Видалити секцію «${sc.name || 'секція'}» зі структури?`)) opDelete(i); };
+    b.title = `${sc.name || 'секція'} · ${fmt(sc.start)}\nКлік — перейти в кінці поточної секції; подвійний клік — одразу; Shift/Ctrl+клік — вибрати кілька (потім Delete); ПКМ — видалити`;
+    el.classList.toggle('sel', E.sel.has(i));
+    b.onclick = (e) => {
+      e.stopPropagation();
+      if (e.shiftKey || e.metaKey || e.ctrlKey || E.sel.size) return selectSection(i, e);
+      if (E.playing) { E.queue = sc.start; renderMarkers(); } else seek(sc.start);
+    };
+    b.ondblclick = (e) => { e.stopPropagation(); clearSel(); E.queue = null; seek(sc.start); renderMarkers(); };
+    b.oncontextmenu = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const many = E.sel.has(i) && E.sel.size > 1 ? [...E.sel] : [i];
+      if (confirm(many.length > 1 ? `Видалити ${many.length} вибраних секцій?` : `Видалити секцію «${sc.name || 'секція'}» зі структури?`)) opDeleteMany(many);
+    };
     box.append(el);
   });
 }
@@ -669,9 +805,15 @@ function drawWave() {
   }
 }
 new ResizeObserver(drawWave).observe($('#wave'));
-$('#wave').onclick = (e) => { if (!E.dur) return; const r = e.currentTarget.getBoundingClientRect(); E.queue = null; seek(((e.clientX - r.left) / r.width) * E.dur); renderMarkers(); };
+$('#wave').onclick = (e) => {
+  if (!E.dur || e.target.closest('#selbar')) return;
+  const r = e.currentTarget.getBoundingClientRect(), t = ((e.clientX - r.left) / r.width) * E.dur;
+  if (e.shiftKey || e.metaKey || e.ctrlKey) { const i = sectionIndexAt(t); if (i >= 0) selectSection(i, e); return; }
+  if (E.sel.size) { clearSel(); return; }
+  E.queue = null; seek(t); renderMarkers();
+};
 function markCurrentSection() {
-  if (!E.song) return;
+  if (!E.song || guardLock()) return;
   const name = prompt('Назва секції (Verse, Chorus, Bridge…)', ''); if (name === null) return;
   if (S.arr[E.song.id]) return opSplit(name.trim());
   const m = S.markers[E.song.id] ||= []; m.push({ t: Math.round(position() * E.tempo * 100) / 100, name: name.trim() });
@@ -760,6 +902,7 @@ function selectTab(t) {
   if (t === 'patch') renderMatrix();
   if (t === 'pads') renderPads();
   if (t === 'library') { renderLibrary(); renderSetlist(); }
+  if (t === 'edit') { renderVersions(); renderStructure(); }
 }
 
 async function fillDevices() {
@@ -854,7 +997,7 @@ async function transformStems(semi, tempo) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181423', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181439', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -878,12 +1021,12 @@ for (let i = -6; i <= 6; i++) $('#xSemi').append(new Option(i > 0 ? '+' + i : St
 $('#xSemi').value = 0;
 $('#xTempo').oninput = (e) => { $('#xTempoVal').textContent = e.target.value + '%'; };
 $('#xApply').onclick = () => {
-  if (!current) return;
+  if (!current || guardLock()) return;
   const x = { semi: +$('#xSemi').value, tempo: +$('#xTempo').value / 100 };
   if (x.semi || x.tempo !== 1) S.xform[current.id] = x; else delete S.xform[current.id];
   save('xform'); loadSong(current, x);
 };
-$('#xReset').onclick = () => { if (!current) return; delete S.xform[current.id]; save('xform'); loadSong(current, null); };
+$('#xReset').onclick = () => { if (!current || guardLock()) return; delete S.xform[current.id]; save('xform'); loadSong(current, null); };
 
 // ── Section / trim / transport extras ──
 $('#btnLoop').onclick = () => { E.loop = !E.loop; $('#btnLoop').classList.toggle('on', E.loop); };
@@ -898,7 +1041,7 @@ function nextSection() {
   const i = s.findIndex((x) => x === sectionAt(position())); const nx = s[i + 1];
   if (!nx) return; if (E.playing) { E.queue = nx.start; renderMarkers(); } else seek(nx.start);
 }
-const setTrim = (patch) => { if (!E.song) return; S.trim[E.song.id] = { ...trimOf(), ...patch }; save('trim'); showTrim(); };
+const setTrim = (patch) => { if (!E.song || guardLock()) return; S.trim[E.song.id] = { ...trimOf(), ...patch }; save('trim'); showTrim(); };
 function showTrim() { const t = trimOf(); $('#trimInfo').textContent = t.start || t.end ? `обрізка: ${fmt(startPos())}–${fmt(endPos())}` : ''; }
 $('#btnStartHere').onclick = () => setTrim({ start: Math.round(position() * E.tempo * 100) / 100 });
 $('#btnEndHere').onclick = () => setTrim({ end: Math.round(position() * E.tempo * 100) / 100 });
@@ -996,4 +1139,4 @@ await initAudio(); await fillDevices(); tick();
 status(`Вихід: ${E.nOut} кан.`);
 
 // Small hook for debugging / automated tests
-window.PB = { addSong(song) { library.push(song); renderLibrary(); }, load: loadSong, state: () => ({ markers: E.markers, dur: E.dur, tempo: E.tempo, arr: S.arr[E.song?.id] || null, stems: E.stems.map((x) => ({ name: x.name, segs: x.segs.length })) }), ops: { opDelete, opDup, opMove, opSplit, opMergeNext, opRename, resetStructure, undoArr, detectGuide } };
+window.PB = { seek, S, mark: markCurrentSection, addSong(song) { library.push(song); renderLibrary(); }, load: loadSong, state: () => ({ markers: E.markers, dur: E.dur, tempo: E.tempo, arr: S.arr[E.song?.id] || null, stems: E.stems.map((x) => ({ name: x.name, segs: x.segs.length })) }), ops: { opDelete, opDup, opMove, opSplit, opMergeNext, opRename, resetStructure, undoArr, detectGuide } };

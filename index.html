@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181423">
+<link rel="stylesheet" href="style.css?v=202611181439">
 </head>
 <body>
 <header id="top">
@@ -44,6 +44,7 @@
     <canvas id="waveCv"></canvas>
     <div id="sections"></div>
     <div id="playhead"></div>
+    <div id="selbar" hidden><span id="selInfo"></span><button id="selDel">Видалити</button><button id="selClear" title="Esc">✕</button></div>
     <div id="waveHint">Оберіть пісню</div>
   </section>
 
@@ -98,6 +99,24 @@
       <label class="chk"><input type="checkbox" id="chkDetect"> Автоматично визначати секції по Guide для пісень без розмітки (перший раз завантажується модель ~40 МБ)</label>
       <div id="structList" class="structlist"></div>
       <p class="hint">Правки структури змінюють саму пісню: видалена секція не гратиме, дубльована повториться, порядок можна міняти. «⇤» ставить початок секції в позицію курсору. Експорт стемів теж бере вже змінену структуру. Початок/кінець нижче діє, поки структуру не змінено.</p>
+      <h3>Версії та закріплення</h3>
+      <div class="row">
+        <select id="verSel" class="inline"></select>
+        <button id="verApply" title="Відкрити збережену версію">Застосувати</button>
+        <button id="verSave" title="Зберегти поточний стан (структура, тональність/темп, мікс) як нову версію">＋ Зберегти як версію…</button>
+        <button id="verOverwrite">Перезаписати</button>
+        <button id="verMain" title="Основна версія — та, що закріплюється">★ Основна</button>
+        <button id="verDelete">Видалити</button>
+      </div>
+      <label class="chk"><input type="checkbox" id="chkPin"> 🔒 Закріпити основну версію: щоразу відкривається саме вона, структура й тон не змінюються випадково</label>
+      <div id="verInfo" class="hint"></div>
+      <div class="row">
+        <button id="verExport" title="Зберегти файл з усіма версіями. Покладіть playback-versions.json у головну папку Playback на Drive — усі лідери побачать ці версії">⬇ Експорт версій</button>
+        <button id="verImport">⬆ Імпорт версій</button>
+        <input type="file" id="verFile" accept=".json,application/json" hidden>
+      </div>
+      <p class="hint">Версія зберігає: структуру (видалені/продубльовані/переставлені секції), мітки, тональність і темп, стан міксу та режим переходу. Щоб усі лідери грали одне й те саме: експортуйте версії й покладіть файл <b>playback-versions.json</b> у головну папку Playback на Drive — апка сама підтягне його при підключенні до Drive.</p>
+
       <h3>Початок / кінець</h3>
       <div class="row">
         <button id="btnStartHere">⇤ Старт тут</button>
@@ -175,6 +194,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181423"></script>
+<script type="module" src="app.js?v=202611181439"></script>
 </body>
 </html>
