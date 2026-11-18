@@ -1,7 +1,7 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { startHost, loadScript } from './remote-host.js?v=202611181536';
-import { detectSections } from './guide.js?v=202611181536';
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181536';
+import { startHost, loadScript } from './remote-host.js?v=202611181546';
+import { detectSections } from './guide.js?v=202611181546';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181546';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -249,7 +249,7 @@ async function driveStemFiles(songId) {
   if (cached?.length && !hasToken()) return cached;           // not signed in (or offline): use the file list remembered earlier
   try {
     const files = (await dList(`'${songId}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'`,
-      'id,name,md5Checksum,modifiedTime')).filter((f) => AUDIO_RE.test(f.name));
+      'id,name,md5Checksum,modifiedTime,size')).filter((f) => AUDIO_RE.test(f.name));
     S.index[songId] = files; save('index'); return files;
   } catch (e) { if (cached?.length) return cached; throw e; }
 }
@@ -257,9 +257,9 @@ async function driveBuf(f) {
   const cache = await caches.open('stems-v1');
   const k = `https://stems.local/${f.id}/${f.md5Checksum || f.modifiedTime}`;
   const hit = await cache.match(k); if (hit) { NET.cached++; return hit.arrayBuffer(); }
-  const buf = await (await dFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`)).arrayBuffer();
-  NET.downloaded++; NET.bytes += buf.byteLength;
-  await cache.put(k, new Response(buf.slice(0))); return buf;
+  const res = await dFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`);
+  const [buf] = await Promise.all([res.clone().arrayBuffer(), cache.put(k, res)]);       // cache and memory read the same stream: no extra copy
+  NET.downloaded++; NET.bytes += buf.byteLength; return buf;
 }
 const NET = { cached: 0, downloaded: 0, bytes: 0 };
 navigator.storage?.persist?.().catch(() => {});   // ask the browser not to evict cached stems
@@ -273,7 +273,7 @@ async function decodeAll(items, label, quiet = false) {            // quiet: fal
   let n = 0;
   return Promise.all(items.map(async (it) => {
     const ab = await it.get();
-    const buffer = monoIfDual(await E.ctx.decodeAudioData(ab.slice(0)));
+    const buffer = monoIfDual(await E.ctx.decodeAudioData(ab));
     ++n; if (typeof quiet === 'function') quiet(n, items.length); else if (!quiet) status(`${label}: ${n}/${items.length}`);
     return { name: it.name, channels: buffer.numberOfChannels, segs: [{ t: 0, d: buffer.duration, off: 0, rate: 1, buffer }] };
   }));
@@ -286,7 +286,13 @@ function driveEntry(f, filesFn) {
     id: f.id, name: f.name, src: 'drive',
     load: async (q) => items(await filesFn(), q),
     loadGuide: async (q) => items((await filesFn()).filter((x) => GUIDE_RE.test(stemName(x.name))), q),   // only the Guide stem (cheap) for section detection
-    prefetch: async (cb) => { const fl = await filesFn(); if (!fl.length) throw new Error('у папці немає аудіофайлів (або немає доступу до неї)'); let d = 0; for (const x of fl) { await driveBuf(x); cb?.(++d, fl.length); } },
+    prefetch: async (cb) => {                    // 5 files at a time
+      const fl = await filesFn(); if (!fl.length) throw new Error('у папці немає аудіофайлів (або немає доступу до неї)');
+      const total = fl.reduce((a, x) => a + (+x.size || 0), 0); let d = 0, bytes = 0, k = 0;
+      await Promise.all(Array.from({ length: Math.min(5, fl.length) }, async () => {
+        while (k < fl.length) { const x = fl[k++]; await driveBuf(x); bytes += +x.size || 0; cb?.(++d, fl.length, { bytes, total }); }
+      }));
+    },
   };
 }
 async function connectDrive() {
@@ -1081,7 +1087,7 @@ async function transformStems(semi, tempo, stems = E.stems, progress = null) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181536', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181546', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -1507,27 +1513,44 @@ async function startPreflight() {
   showScreen('preflight'); PF.cancel = false; PF.running = true; PF.t0 = performance.now();
   const songs = S.setlist.map((id) => library.find((x) => x.id === id) || null);
   const sun = activeSunday(); $('#pfTitle').textContent = `Підготовка: ${sun ? sun.name : 'сетліст'}`; $('#pfMem').value = S.memMode;
-  $('#pfEnter').disabled = true; $('#pfRetry').hidden = true; $('#pfNote').textContent = ''; $('#pfSummary').textContent = '';
+  $('#pfEnter').disabled = true; $('#pfRetry').hidden = true; $('#pfNote').textContent = ''; $('#pfSummary').textContent = ''; $('#pfSpeed').textContent = '';
   pfBuild(songs); pfOverall();
   if (signInErr) $('#pfNote').textContent = 'Вхід у Google не вдався (' + signInErr + '). Натисніть «Google Drive» на головній і повторіть.';
   const mode = S.memMode;
   const filesReady = songs.map(() => { let r; const p = new Promise((res) => (r = res)); p.fin = r; return p; });
-  (async () => {            // downloader runs ahead of the decoder
-    for (let i = 0; i < songs.length; i++) {
+  let nextDl = 0;
+  const mbs = (n) => Math.round(n / 104857.6) / 10;
+  const dlWorker = async () => {            // two songs download at once, ahead of the decoder
+    for (;;) {
+      const i = nextDl++; if (i >= songs.length) return;
       const sg = songs[i];
       if (PF.cancel) { filesReady[i].fin({ ok: false, err: 'скасовано' }); continue; }
       if (!sg) { filesReady[i].fin({ ok: false, err: 'пісні немає в бібліотеці — підключіть Drive / відкрийте папку Ableton на головній' }); continue; }
-      try { if (sg.prefetch && sg.src === 'drive') { setStage(i, 'files', 0, 1); pfMsg(i, 'Завантажую файли…'); await sg.prefetch((d, t) => setStage(i, 'files', d, t)); setStage(i, 'files', 1, 1); } else skipStage(i, 'files'); filesReady[i].fin({ ok: true }); }
-      catch (e) { filesReady[i].fin({ ok: false, err: 'файли: ' + e.message + (/token|auth|popup|Drive 40/.test(e.message) ? ' — натисніть «Google Drive» на головній' : '') }); }
+      try {
+        if (sg.prefetch && sg.src === 'drive') {
+          setStage(i, 'files', 0, 1); pfMsg(i, 'Завантажую файли…');
+          await sg.prefetch((d, t, info) => { setStage(i, 'files', d, t); if (info?.total) pfMsg(i, `Завантажую: ${mbs(info.bytes)} з ${mbs(info.total)} МБ`); });
+          setStage(i, 'files', 1, 1);
+        } else skipStage(i, 'files');
+        filesReady[i].fin({ ok: true });
+      } catch (e) { filesReady[i].fin({ ok: false, err: 'файли: ' + e.message + (/token|auth|popup|Drive 40/.test(e.message) ? ' — натисніть «Google Drive» на головній' : '') }); }
     }
-  })();
+  };
+  PF.b0 = NET.bytes; clearInterval(PF.speedTimer);
+  PF.speedTimer = setInterval(() => { const dt = (performance.now() - PF.t0) / 1000, db = NET.bytes - PF.b0; $('#pfSpeed').textContent = db > 0 ? `Завантажено з Drive: ${mbs(db)} МБ · ≈ ${(db / 1048576 / Math.max(dt, 1)).toFixed(1)} МБ/с` : ''; }, 1000);
+  Promise.all([dlWorker(), dlWorker()]);
   let errs = 0, totalMB = 0;
   for (let i = 0; i < songs.length; i++) {
     const fr = await filesReady[i]; if (PF.cancel) break;
     if (!fr.ok) { pfMsg(i, fr.err, 'bad'); PF.rows[i].err = true; errs++; continue; }
     try { totalMB += await pfPrepare(i, songs[i], mode); } catch (e) { pfMsg(i, 'Помилка: ' + e.message, 'bad'); PF.rows[i].err = true; errs++; }
+    const ready = PF.rows.filter((r) => r.done).length;
+    if (ready >= 1 && $('#pfEnter').disabled) { $('#pfEnter').disabled = false; $('#pfEnter').textContent = '▶ Увійти зараз (решта готується у фоні)'; }
+    if ($('#preflight').hidden && i < songs.length - 1) status(`Підготовка пісень у фоні: ${ready}/${songs.length}`);
   }
+  clearInterval(PF.speedTimer); $('#pfEnter').textContent = '▶ Увійти в режим запуску';
   PF.running = false; if (PF.cancel) return;
+  if ($('#preflight').hidden) status(errs ? `Підготовка завершена, проблем: ${errs}` : `Усі ${songs.length} пісень підготовлено`);
   const secs = ((performance.now() - PF.t0) / 1000).toFixed(0);
   $('#pfBar').style.width = '100%'; $('#pfPct').textContent = '100%';
   $('#pfSummary').textContent = `${songs.length - errs} з ${songs.length} пісень готові за ${secs} с · у пам'яті ≈ ${Math.round(totalMB)} МБ${mode === 'economy' ? ' (економний режим: поточна й наступна пісня)' : ''}${errs ? ` · проблем: ${errs}` : ''}`;
@@ -1541,7 +1564,7 @@ async function enterPerform() {
   if (okFirst && current !== okFirst) await loadSong(okFirst); else preloadNext();
 }
 $('#pfEnter').onclick = enterPerform;
-$('#pfCancel').onclick = () => { PF.cancel = true; PF.running = false; showScreen('home'); };
+$('#pfCancel').onclick = () => { PF.cancel = true; PF.running = false; clearInterval(PF.speedTimer); showScreen('home'); };
 $('#pfRetry').onclick = () => { PF.running = false; startPreflight(); };
 $('#pfMem').onchange = (e) => { S.memMode = e.target.value; save('memMode'); };
 $('#hLaunch').onclick = startPreflight;
