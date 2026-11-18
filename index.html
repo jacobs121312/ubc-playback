@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181406">
+<link rel="stylesheet" href="style.css?v=202611181413">
 </head>
 <body>
 <header id="top">
@@ -151,6 +151,10 @@
       </div>
       <p class="hint">Встановіть <b>Dante Virtual Soundcard</b> (Mac/Win), у Chrome оберіть її як вихід. Канали DVS (до 64) з'являться тут як виходи; підписки DVS → пульт робляться в Dante Controller. Sample rate DVS — 48 kHz.</p>
 
+      <h3>Пам'ять</h3>
+      <label class="chk"><input type="checkbox" id="chkPre"> Заздалегідь розпаковувати наступну пісню сетлісту (швидший перехід, але до 2× більше RAM)</label>
+      <p class="hint">Файли з Drive зберігаються в кеші браузера й повторно не завантажуються (статус після відкриття пісні показує «з локального кешу» або скільки завантажено). Повторне відкриття пісні лише розпаковує звук.</p>
+
       <h3>MIDI-пульт</h3>
       <div class="form"><button id="btnMidi">Увімкнути MIDI</button><div id="midiInfo" class="hint"></div></div>
       <p class="hint">Ноти: 60 Play/Pause · 61 Stop · 62 наступна пісня · 63 попередня · 64 наступна секція · 65 Loop · 66 Fade out. Клавіші: Space, → наступна секція, ← на початок.</p>
@@ -165,6 +169,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181406"></script>
+<script type="module" src="app.js?v=202611181413"></script>
 </body>
 </html>

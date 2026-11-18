@@ -1,5 +1,5 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181406';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181413';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -12,7 +12,7 @@ const S = {
   index: store.get('index', {}),
   markers: store.get('markers', {}), trim: store.get('trim', {}), mix: store.get('mix', {}),
   presets: store.get('presets', {}), pad: store.get('pad', { out: [0, 1], vol: 0.5, key: 'C' }),
-  autoAdvance: store.get('autoAdvance', true), xform: store.get('xform', {}),
+  autoAdvance: store.get('autoAdvance', true), preload: store.get('preload', false), xform: store.get('xform', {}),
 };
 const save = (k) => store.set(k, S[k]);
 const status = (t) => { $('#status').textContent = t; };
@@ -93,6 +93,7 @@ function sections() {
 }
 const sectionAt = (p) => sections().find((s) => p >= s.start - 0.001 && p < s.end - 0.001);
 async function play(lead = 0.12) {
+  if (E.loading) return status('Зачекайте — пісня ще обробляється…');
   if (!E.stems.length || E.playing) return;
   await E.ctx.resume();
   const t0 = E.ctx.currentTime + lead;
@@ -209,22 +210,25 @@ async function driveStemFiles(songId) {
 async function driveBuf(f) {
   const cache = await caches.open('stems-v1');
   const k = `https://stems.local/${f.id}/${f.md5Checksum || f.modifiedTime}`;
-  const hit = await cache.match(k); if (hit) return hit.arrayBuffer();
+  const hit = await cache.match(k); if (hit) { NET.cached++; return hit.arrayBuffer(); }
   const buf = await (await dFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`)).arrayBuffer();
+  NET.downloaded++; NET.bytes += buf.byteLength;
   await cache.put(k, new Response(buf.slice(0))); return buf;
 }
+const NET = { cached: 0, downloaded: 0, bytes: 0 };
+navigator.storage?.persist?.().catch(() => {});   // ask the browser not to evict cached stems
 function monoIfDual(buf) {     // dual-mono stereo files -> mono (halves RAM)
   if (buf.numberOfChannels !== 2) return buf;
   const a = buf.getChannelData(0), b = buf.getChannelData(1);
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return buf;
   const m = E.ctx.createBuffer(1, buf.length, buf.sampleRate); m.copyToChannel(a, 0); return m;
 }
-async function decodeAll(items, label) {            // items: [{name, get:()=>Promise<ArrayBuffer>}]
+async function decodeAll(items, label, quiet = false) {            // items: [{name, get:()=>Promise<ArrayBuffer>}]
   let n = 0;
   return Promise.all(items.map(async (it) => {
     const ab = await it.get();
     const buffer = monoIfDual(await E.ctx.decodeAudioData(ab.slice(0)));
-    status(`${label}: ${++n}/${items.length}`);
+    if (!quiet) status(`${label}: ${++n}/${items.length}`);
     return { name: it.name, channels: buffer.numberOfChannels, segs: [{ t: 0, d: buffer.duration, off: 0, rate: 1, buffer }] };
   }));
 }
@@ -243,7 +247,7 @@ async function connectDrive() {
   }
   library = library.filter((s) => s.src !== 'drive').concat(folders.map((f) => ({
     id: f.id, name: f.name, src: 'drive',
-    load: async () => decodeAll((await driveStemFiles(f.id)).map((x) => ({ name: stemName(x.name), get: () => driveBuf(x) })), f.name),
+    load: async (q) => decodeAll((await driveStemFiles(f.id)).map((x) => ({ name: stemName(x.name), get: () => driveBuf(x) })), f.name, q),
     prefetch: async () => { for (const x of await driveStemFiles(f.id)) await driveBuf(x); },
   })));
   renderLibrary(); status(`Drive: ${folders.length} пісень`);
@@ -253,7 +257,7 @@ function offlineDrive() {       // show cached Drive songs without login
   if (!folders.length) return;
   library = library.concat(folders.map((f) => ({
     id: f.id, name: f.name, src: 'drive',
-    load: async () => decodeAll((S.index[f.id] || []).map((x) => ({ name: stemName(x.name), get: () => driveBuf(x) })), f.name),
+    load: async (q) => decodeAll((S.index[f.id] || []).map((x) => ({ name: stemName(x.name), get: () => driveBuf(x) })), f.name, q),
     prefetch: async () => {},
   })));
 }
@@ -268,7 +272,7 @@ async function openLocal() {
   if (own.length) songs.unshift([dir.name, dir]);
   library = library.filter((s) => s.src !== 'local').concat(songs.map(([name, h]) => ({
     id: 'local:' + name, name, src: 'local', prefetch: async () => {},
-    load: async () => decodeAll((await audioIn(h)).map((f) => ({ name: stemName(f.name), get: async () => (await f.getFile()).arrayBuffer() })), name),
+    load: async (q) => decodeAll((await audioIn(h)).map((f) => ({ name: stemName(f.name), get: async () => (await f.getFile()).arrayBuffer() })), name, q),
   })));
   renderLibrary(); status(`Локально: ${songs.length} пісень`);
 }
@@ -290,11 +294,27 @@ function demoSong() {
 
 // ───────────── Song loading / setlist ─────────────
 let current = null;
+const decoded = new Map();            // song.id -> Promise<items>, kept for current + next song only
+function getItems(song, quiet) {
+  if (!decoded.has(song.id)) {
+    const p = Promise.resolve(song.load(quiet)); decoded.set(song.id, p);
+    p.catch(() => decoded.delete(song.id));
+  }
+  return decoded.get(song.id);
+}
+function preloadNext() {
+  const list = S.setlist.map((id) => library.find((s) => s.id === id)).filter(Boolean);
+  const nx = list[list.indexOf(current) + 1];
+  const keep = new Set([current?.id, nx?.id]);
+  for (const k of [...decoded.keys()]) if (!keep.has(k)) decoded.delete(k);
+  if (S.preload && nx && nx.src !== 'demo' && !decoded.has(nx.id)) getItems(nx, true).catch(() => {});
+}
 async function loadSong(song, xf = S.xform[song.id]) {
-  stop(); current = song; renderLibrary(); renderSetlist();
+  stop(); current = song; E.loading = true; renderLibrary(); renderSetlist();
   $('#songName').textContent = song.name; $('#songMeta').textContent = 'завантаження…';
   try {
-    let items = song.src === 'demo' ? demoSong() : await song.load();
+    const hadMem = decoded.has(song.id), n0 = { ...NET };
+    let items = song.src === 'demo' ? demoSong() : await getItems(song);
     if (current !== song) return;
     let extra = { markers: [], warnings: [], tempo: 0, dur: 0 };
     if (!Array.isArray(items)) { extra = items; items = items.stems; }
@@ -315,8 +335,12 @@ async function loadSong(song, xf = S.xform[song.id]) {
     E.stems.forEach(buildStemNodes);
     $('#songMeta').textContent = `${E.stems.length} стемів · ${fmt(E.dur)}` + (extra.tempo ? ` · ${extra.tempo} BPM` : '');
     renderMarkers(); renderReport(extra.warnings || []);
-    syncXform(); status('Готово'); renderMixer(); renderMatrix();
+    syncXform(); renderMixer(); renderMatrix();
+    const dl = NET.downloaded - n0.downloaded, ca = NET.cached - n0.cached;
+    status(hadMem ? 'Готово (з пам\'яті)' : dl ? `Готово · завантажено з Drive: ${dl} файлів, ${(((NET.bytes - n0.bytes)) / 1048576).toFixed(0)} МБ` : ca ? `Готово · з локального кешу (${ca} файлів)` : 'Готово');
+    preloadNext();
   } catch (e) { $('#songMeta').textContent = 'помилка: ' + e.message; status('Помилка: ' + e.message); }
+  finally { if (current === song) E.loading = false; }
 }
 function advance(d, autoplay) {
   const list = S.setlist.map((id) => library.find((s) => s.id === id)).filter(Boolean);
@@ -509,7 +533,7 @@ async function openAbleton() {
   const projects = ablIndex.projects;
   library = library.filter((s) => s.src !== 'als').concat(projects.map((p) => ({
     id: 'als:' + p.parts.join('/'), name: p.name.replace(/\.als$/i, ''), src: 'als', prefetch: async () => {},
-    load: async () => loadProject(p, ablIndex, E.ctx, (d, n) => status(`${p.name}: ${d}/${n} треків`)),
+    load: async (q) => loadProject(p, ablIndex, E.ctx, (d, n) => { if (!q) status(`${p.name}: ${d}/${n} треків`); }),
   })));
   renderLibrary(); status(`Знайдено проєктів Ableton: ${projects.length}`);
 }
@@ -654,7 +678,7 @@ async function transformStems(semi, tempo) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181406', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181413', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -698,6 +722,7 @@ function showTrim() { const t = trimOf(); $('#trimInfo').textContent = t.start |
 $('#btnStartHere').onclick = () => setTrim({ start: Math.round(position() * E.tempo * 100) / 100 });
 $('#btnEndHere').onclick = () => setTrim({ end: Math.round(position() * E.tempo * 100) / 100 });
 $('#btnClearTrim').onclick = () => { if (E.song) { delete S.trim[E.song.id]; save('trim'); showTrim(); } };
+$('#chkPre').checked = S.preload; $('#chkPre').onchange = (e) => { S.preload = e.target.checked; save('preload'); preloadNext(); };
 $('#chkAuto').checked = S.autoAdvance; $('#chkAuto').onchange = (e) => { S.autoAdvance = e.target.checked; save('autoAdvance'); };
 $('#btnFade').onclick = () => fadeOutStop(3);
 
