@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181439">
+<link rel="stylesheet" href="style.css?v=202611181445">
 </head>
 <body>
 <header id="top">
@@ -43,6 +43,8 @@
   <section id="wave">
     <canvas id="waveCv"></canvas>
     <div id="sections"></div>
+    <div id="fadeTail" hidden></div>
+    <div id="fadeMark" hidden><span>FADE</span></div>
     <div id="playhead"></div>
     <div id="selbar" hidden><span id="selInfo"></span><button id="selDel">Видалити</button><button id="selClear" title="Esc">✕</button></div>
     <div id="waveHint">Оберіть пісню</div>
@@ -116,6 +118,17 @@
         <input type="file" id="verFile" accept=".json,application/json" hidden>
       </div>
       <p class="hint">Версія зберігає: структуру (видалені/продубльовані/переставлені секції), мітки, тональність і темп, стан міксу та режим переходу. Щоб усі лідери грали одне й те саме: експортуйте версії й покладіть файл <b>playback-versions.json</b> у головну папку Playback на Drive — апка сама підтягне його при підключенні до Drive.</p>
+
+      <h3>Fade-out у вибраний момент</h3>
+      <div class="row">
+        <button id="fadeSet" title="Fade почнеться з позиції курсору">⤓ Fade з курсору</button>
+        <button id="fadeSecEnd" title="Fade закінчується в кінці поточної секції">⤓ Fade в кінці секції</button>
+        <label class="chk">тривалість <input id="fadeDur" type="number" min="0.5" max="60" step="0.5" value="4" style="width:64px"> с</label>
+        <button id="fadeTest" title="Програти за 4 с до початку фейду">▶ Прослухати</button>
+        <button id="fadeClear">✕ Прибрати</button>
+      </div>
+      <div id="fadeInfo" class="hint"></div>
+      <p class="hint">Поставте курсор (клік по хвилі) у момент, де має починатись затухання, натисніть «Fade з курсору» — пісня затухне за вказаний час і сама закінчиться. Fade зберігається з версією пісні та враховується в експорті WAV.</p>
 
       <h3>Початок / кінець</h3>
       <div class="row">
@@ -194,6 +207,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181439"></script>
+<script type="module" src="app.js?v=202611181445"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { detectSections } from './guide.js?v=202611181439';
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181439';
+import { detectSections } from './guide.js?v=202611181445';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181445';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -13,7 +13,7 @@ const S = {
   index: store.get('index', {}),
   markers: store.get('markers', {}), trim: store.get('trim', {}), mix: store.get('mix', {}),
   presets: store.get('presets', {}), pad: store.get('pad', { out: [0, 1], vol: 0.5, key: 'C' }),
-  ver: store.get('ver', {}), pinned: store.get('pinned', {}),
+  ver: store.get('ver', {}), pinned: store.get('pinned', {}), fade: store.get('fade', {}),
   arr: store.get('arr', {}), trans: store.get('trans', {}), autoDetect: store.get('autoDetect', true),
   autoAdvance: store.get('autoAdvance', true), preload: store.get('preload', false), xform: store.get('xform', {}),
 };
@@ -52,7 +52,8 @@ function buildStemNodes(st) {
   st.g = ctx.createGain();
   st.an = ctx.createAnalyser(); st.an.fftSize = 512;
   st.split = ctx.createChannelSplitter(2);
-  st.g.connect(st.an); st.g.connect(st.split);
+  st.fade = ctx.createGain();                         // song-level fade-out automation (independent of the fader)
+  st.g.connect(st.fade); st.fade.connect(st.an); st.fade.connect(st.split);
   st.data = new Float32Array(st.an.fftSize);
   applyRoutes(st); applyGain(st);
 }
@@ -78,7 +79,30 @@ function setPatch(name, routes) {
 
 const trimOf = () => S.trim[E.song?.id] || {};
 const startPos = () => (S.arr[E.song?.id] ? 0 : (trimOf().start || 0) / E.tempo);
-const endPos = () => (!S.arr[E.song?.id] && trimOf().end ? Math.min(trimOf().end / E.tempo, E.dur) : E.dur);
+const endPos = () => {
+  const b = !S.arr[E.song?.id] && trimOf().end ? Math.min(trimOf().end / E.tempo, E.dur) : E.dur, F = fadeOf();
+  return F ? Math.min(b, F.t + F.dur) : b;
+};
+// ── Fade-out at a chosen moment: start (song position) + duration; the song ends when the fade ends ──
+function fadeOf() {
+  const f = S.fade[E.song?.id]; if (!f) return null;
+  const t = f.at / E.tempo; if (!(t < E.dur)) return null;
+  return { t, dur: Math.max(0.3, Math.min(f.dur, E.dur - t)) };
+}
+const fadeV = (x) => (1 + Math.cos(Math.PI * Math.min(1, Math.max(0, x)))) / 2;      // smooth S-curve 1 -> 0
+const fadeCurve = (x0, n = 96) => Float32Array.from({ length: n }, (_, i) => fadeV(x0 + ((1 - x0) * i) / (n - 1)));
+function armFade(T, pos) {                         // ctx time T corresponds to song position pos
+  const F = fadeOf(); if (!E.ctx) return;
+  E.stems.forEach((st) => {
+    if (!st.fade) return; const g = st.fade.gain; g.cancelScheduledValues(T);
+    if (!F || pos < 0) { g.setValueAtTime(1, T); return; }
+    const end = F.t + F.dur;
+    if (pos >= end) g.setValueAtTime(0, T);
+    else if (pos >= F.t) { const x0 = (pos - F.t) / F.dur; g.setValueAtTime(fadeV(x0), T); g.setValueCurveAtTime(fadeCurve(x0), T + 0.001, end - pos - 0.001); }
+    else { g.setValueAtTime(1, T); g.setValueCurveAtTime(fadeCurve(0), T + (F.t - pos), F.dur); }
+  });
+}
+function fadeNeutral() { if (E.ctx) armFade(E.ctx.currentTime, -1); }
 function position() {
   if (E.pendingJump && E.ctx.currentTime >= E.pendingJump.tb) { E.startedAt = E.pendingJump.tb - E.pendingJump.target; E.pendingJump = null; }
   return E.playing ? Math.min(E.ctx.currentTime - E.startedAt, E.dur) : E.pos;
@@ -88,6 +112,7 @@ function jumpAt(at, target) {
   const tb = E.startedAt + at;
   E.sources.forEach((s) => { try { s.stop(tb); } catch {} });
   E.sources.push(...E.stems.flatMap((st) => schedule(E.ctx, st, st.g, tb, target)));
+  armFade(tb, target);
   E.pendingJump = { tb, target };
 }
 function sections() {
@@ -102,6 +127,7 @@ async function play(lead = 0.12) {
   const t0 = E.ctx.currentTime + lead;
   if (E.pos >= endPos() - 0.05) E.pos = startPos();
   E.sources = E.stems.flatMap((st) => schedule(E.ctx, st, st.g, t0, E.pos));
+  armFade(t0, E.pos);
   E.startedAt = t0 - E.pos; E.playing = true;
   syncPlayBtn();
 }
@@ -145,12 +171,12 @@ setInterval(() => {          // scheduler: queued/looped section jumps + end of 
   if (p >= endPos() - 0.05 && !E.pendingJump) { stop(); if (mode !== 'stop' && S.autoAdvance) advance(1, true); }
 }, 25);
 function halt() { E.sources.forEach((s) => { s.onended = null; try { s.stop(); } catch {} }); E.sources = []; }
-function pause() { if (!E.playing) return; E.pos = position(); halt(); E.playing = false; syncPlayBtn(); }
+function pause() { if (!E.playing) return; E.pos = position(); halt(); E.playing = false; fadeNeutral(); syncPlayBtn(); }
 function stop() {
-  halt(); E.playing = false; E.pendingJump = null; E.queue = null; E.pos = startPos(); syncPlayBtn();
+  halt(); E.playing = false; E.pendingJump = null; E.queue = null; E.pos = startPos(); fadeNeutral(); syncPlayBtn();
   if (E.fading) { E.fading = false; E.master.gain.cancelScheduledValues(0); E.master.gain.setValueAtTime(E.masterVol, E.ctx.currentTime); }
 }
-function seek(t) { const was = E.playing; if (was) { halt(); E.playing = false; E.pendingJump = null; } E.pos = t; if (was) play(0.03); }
+function seek(t) { const was = E.playing; if (was) { halt(); E.playing = false; E.pendingJump = null; fadeNeutral(); } E.pos = t; if (was) play(0.03); }
 function fadeOutStop(sec = 3) {
   if (!E.playing) return;
   const g = E.master.gain, t = E.ctx.currentTime;
@@ -499,7 +525,7 @@ function rebuildMarkers() {
     E.stems.forEach((st) => { st.segs = st.baseSegs; }); E.dur = E.baseDur;
     E.markers = baseSections().map((x) => ({ t: x.from / T, name: x.name, t0: x.from }));
   }
-  computePeaks(); drawWave(); renderMarkers(); renderStructure();
+  computePeaks(); drawWave(); renderMarkers(); renderStructure(); renderFade();
 }
 const arrHist = [];
 function commitArr(arr, { soft = false } = {}) {
@@ -571,6 +597,31 @@ function renderStructure() {
   refreshSel();
 }
 
+// ── Fade-out UI ──
+function renderFade() {
+  const F = fadeOf(), el = $('#fadeMark'), tail = $('#fadeTail');
+  const has = !!S.fade[E.song?.id];
+  el.hidden = tail.hidden = !F;
+  $('#fadeInfo').textContent = !E.song ? '' : F ? `Fade out: з ${fmt(F.t)}, ${F.dur.toFixed(1)} с → пісня закінчується о ${fmt(F.t + F.dur)}` : has ? 'Позначка fade-out поза межами пісні (структуру змінено) — задайте заново' : 'Fade-out не задано — пісня грає до кінця';
+  if (!F || !E.dur) return;
+  el.style.left = (F.t / E.dur) * 100 + '%'; el.style.width = (F.dur / E.dur) * 100 + '%';
+  tail.style.left = ((F.t + F.dur) / E.dur) * 100 + '%'; tail.style.width = (100 - ((F.t + F.dur) / E.dur) * 100) + '%';
+  $('#fadeDur').value = S.fade[E.song.id].dur;
+}
+function setFade(at, dur) {
+  if (!E.song || guardLock()) return;
+  S.fade[E.song.id] = { at: Math.round(at * E.tempo * 100) / 100, dur: Math.max(0.5, Math.min(60, dur || 4)) }; save('fade');
+  renderFade(); if (E.playing) armFade(E.ctx.currentTime + 0.02, position());
+}
+$('#fadeSet').onclick = () => setFade(position(), +$('#fadeDur').value || 4);
+$('#fadeSecEnd').onclick = () => {
+  const sc = sectionAt(position()); if (!sc) return status('Немає секції в позиції курсору');
+  const d = +$('#fadeDur').value || 4; setFade(Math.max(0, sc.end - d), d);
+};
+$('#fadeDur').onchange = () => { const F = fadeOf(); if (F) setFade(F.t, +$('#fadeDur').value || 4); };
+$('#fadeClear').onclick = () => { if (!E.song || guardLock()) return; delete S.fade[E.song.id]; save('fade'); renderFade(); if (E.playing) armFade(E.ctx.currentTime + 0.02, position()); };
+$('#fadeTest').onclick = () => { const F = fadeOf(); if (!F) return status('Fade-out не задано'); seek(Math.max(0, F.t - 4)); if (!E.playing) play(); };
+
 // ── Multi-select of sections (Shift = range, Ctrl/Cmd = toggle) ──
 const locked = () => !!S.pinned[E.song?.id];
 function guardLock() { if (locked()) { status('🔒 Пісню закріплено (версія «' + (S.ver[E.song.id]?.main || '') + '»). Зніміть закріплення в EDIT → «Версії», щоб змінювати'); return true; } return false; }
@@ -606,12 +657,12 @@ addEventListener('keydown', (e) => {
 // ── Saved versions (what is played every Sunday), pinning, export/import, sharing via Drive ──
 function snapshot() {
   const id = E.song.id;
-  return JSON.parse(JSON.stringify({ arr: S.arr[id] || null, markers: S.markers[id] || [], xform: S.xform[id] || null, mix: S.mix[id] || {}, trans: S.trans[id] || 'next', trim: S.trim[id] || null, savedAt: Date.now() }));
+  return JSON.parse(JSON.stringify({ arr: S.arr[id] || null, markers: S.markers[id] || [], xform: S.xform[id] || null, mix: S.mix[id] || {}, trans: S.trans[id] || 'next', trim: S.trim[id] || null, fade: S.fade[id] || null, savedAt: Date.now() }));
 }
 function restoreState(id, sn) {
   const set = (k, v, empty) => { if (v == null || (empty && empty(v))) delete S[k][id]; else S[k][id] = JSON.parse(JSON.stringify(v)); save(k); };
   set('arr', sn.arr); set('markers', sn.markers, (v) => !v.length); set('xform', sn.xform); set('mix', sn.mix, (v) => !Object.keys(v).length);
-  set('trans', sn.trans && sn.trans !== 'next' ? sn.trans : null); set('trim', sn.trim);
+  set('trans', sn.trans && sn.trans !== 'next' ? sn.trans : null); set('trim', sn.trim); set('fade', sn.fade);
 }
 function pinnedVersion(id) { const v = S.ver[id]; return S.pinned[id] && v && v.list[v.main] ? v.list[v.main] : null; }
 function renderVersions() {
@@ -885,8 +936,10 @@ async function exportStems() {
   let i = 0;
   for (const st of E.stems) {
     status(`Експорт ${++i}/${E.stems.length}: ${st.name}`);
-    const oc = new OfflineAudioContext(st.channels, Math.ceil(E.dur * 48000), 48000);
-    const g = oc.createGain(); g.gain.value = st.vol; g.connect(oc.destination);
+    const F = fadeOf(), outDur = F ? Math.min(E.dur, F.t + F.dur) : E.dur;
+    const oc = new OfflineAudioContext(st.channels, Math.ceil(outDur * 48000), 48000);
+    const g = oc.createGain(); g.gain.setValueAtTime(st.vol, 0); g.connect(oc.destination);
+    if (F) g.gain.setValueCurveAtTime(fadeCurve(0).map((v) => v * st.vol), F.t, F.dur);
     schedule(oc, st, g, 0, 0);
     await writeWav(dir, `${String(i).padStart(2, '0')} ${safe(st.name)}.wav`, await oc.startRendering());
   }
@@ -997,7 +1050,7 @@ async function transformStems(semi, tempo) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181439', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181445', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -1139,4 +1192,4 @@ await initAudio(); await fillDevices(); tick();
 status(`Вихід: ${E.nOut} кан.`);
 
 // Small hook for debugging / automated tests
-window.PB = { seek, S, mark: markCurrentSection, addSong(song) { library.push(song); renderLibrary(); }, load: loadSong, state: () => ({ markers: E.markers, dur: E.dur, tempo: E.tempo, arr: S.arr[E.song?.id] || null, stems: E.stems.map((x) => ({ name: x.name, segs: x.segs.length })) }), ops: { opDelete, opDup, opMove, opSplit, opMergeNext, opRename, resetStructure, undoArr, detectGuide } };
+window.PB = { seek, S, fadeGain: () => E.stems[0]?.fade.gain.value, pos: position, playing: () => E.playing, setFade, play, mark: markCurrentSection, addSong(song) { library.push(song); renderLibrary(); }, load: loadSong, state: () => ({ markers: E.markers, dur: E.dur, tempo: E.tempo, arr: S.arr[E.song?.id] || null, stems: E.stems.map((x) => ({ name: x.name, segs: x.segs.length })) }), ops: { opDelete, opDup, opMove, opSplit, opMergeNext, opRename, resetStructure, undoArr, detectGuide } };
