@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181619">
+<link rel="stylesheet" href="style.css?v=202611181703">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -236,10 +236,29 @@
               <button data-c="B" style="--c:#ff6bb5"><i></i>Брідж</button>
               <button data-c="Pc" style="--c:#ffb020"><i></i>Пре-приспів</button>
               <button data-c="Tg" style="--c:#ff8a4c"><i></i>Тег</button>
-              <span class="qh">копія вставляється після секції під курсором і одразу грає зі стику</span>
+              <button data-c="*" style="--c:#8a91a2"><i></i>Інша…</button>
+              <span class="qh">спершу оберіть, яку саме секцію повторити і куди вставити</span>
             </div>
 
-            <div class="listhead"><h3>Секції</h3><div id="estSel" class="estsel" hidden><span id="estSelInfo"></span><button id="estSelDel" class="btn danger sm"><svg class="ic"><use href="#i-trash"/></svg>Видалити</button><button id="estSelClear" class="btn ghost sm">Зняти</button></div></div>
+            <div id="addPanel" class="addpanel" hidden>
+              <div class="ap-h"><b id="apTitle">Додати копію секції</b><button id="apClose" class="ib" title="Закрити">✕</button></div>
+              <div class="ap-sec"><label>Яку секцію повторити? <small>можна вибрати кілька — вставляться підряд</small></label><div id="apSrc" class="ap-grid"></div></div>
+              <div class="ap-sec"><label>Куди вставити?</label>
+                <div id="apWhere" class="seg">
+                  <button data-w="cursor" class="on">Після курсору<small id="apCursorName"></small></button>
+                  <button data-w="after">Після секції…</button>
+                  <button data-w="end">У кінець</button>
+                  <button data-w="start">На початок</button>
+                </div>
+                <select id="apAfter" class="full" hidden></select>
+              </div>
+              <div class="ap-f">
+                <label class="sw"><input type="checkbox" id="apPreview" checked><span class="trk"></span><span class="lbl">Одразу прослухати стик</span></label>
+                <div class="actions" style="margin:0"><button id="apAdd" class="btn solid">Додати</button><button id="apCancel" class="btn ghost">Скасувати</button></div>
+              </div>
+            </div>
+
+            <div class="listhead"><h3>Секції</h3><div id="estSel" class="estsel" hidden><span id="estSelInfo"></span><button id="estSelCopy" class="btn sm" title="Вставити копії вибраних секцій після курсору"><svg class="ic"><use href="#i-copy"/></svg>Копіювати після курсору</button><button id="estSelDel" class="btn danger sm"><svg class="ic"><use href="#i-trash"/></svg>Видалити</button><button id="estSelClear" class="btn ghost sm">Зняти</button></div></div>
             <div id="structList" class="structlist"></div>
             <p class="foot">Перетягніть ⠿ щоб змінити порядок · клік по назві — перейменувати · Shift/Ctrl+клік по кольоровому бейджу — вибрати кілька.</p>
           </div>
@@ -426,6 +445,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181619"></script>
+<script type="module" src="app.js?v=202611181703"></script>
 </body>
 </html>

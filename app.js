@@ -1,7 +1,7 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { startHost, loadScript } from './remote-host.js?v=202611181619';
-import { detectSections } from './guide.js?v=202611181619';
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181619';
+import { startHost, loadScript } from './remote-host.js?v=202611181703';
+import { detectSections } from './guide.js?v=202611181703';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181703';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -591,14 +591,52 @@ const curArr = () => (S.arr[E.song?.id] ? S.arr[E.song.id].map((x) => ({ ...x })
 function opDelete(i) { if (guardLock()) return; const a = curArr(); if (a.length <= 1) return status('Не можна видалити останню секцію'); const [r] = a.splice(i, 1); commitArr(a); status(`Видалено «${r.name || 'секція'}» · скасувати: EDIT → ↶ або Cmd+Z`); }
 function opInsertCopy(src, after) { const a = curArr(); if (src < 0 || src >= a.length) return -1; a.splice(after + 1, 0, { ...a[src] }); commitArr(a); return after + 1; }
 const SEC_TYPES = { C: 'приспів', V: 'куплет', B: 'брідж', Pc: 'пре-приспів', Tg: 'тег' };
-function quickAdd(code) {
+const quickAdd = (code) => openAddPanel(code === '*' ? null : code);
+// ── "Add another" chooser: pick EXACTLY which section(s) to repeat and where to put them ──
+const AP = { src: new Set(), where: 'cursor', matches: [], filter: null };
+function openAddPanel(code, preselect) {
   if (guardLock()) return;
   if (!E.markers.length) return status('Спершу додайте або визначте секції');
-  const idx = E.markers.map((m, i) => [i, secInfo(m.name).code.replace(/\d+$/, '')]).filter(([, c]) => c === code).map(([i]) => i);
-  if (!idx.length) return status(`У пісні немає секції «${SEC_TYPES[code]}», яку можна повторити`);
-  const src = idx[idx.length - 1]; let after = sectionIndexAt(position()); if (after < 0) after = E.markers.length - 1;
-  const at = opInsertCopy(src, after); if (at < 0) return;
-  status(`Додано ще один ${SEC_TYPES[code]} після секції ${after + 1}. Прослуховую з'єднання…`); previewJoinAt(at);
+  const all = E.markers.map((m, i) => [i, secInfo(m.name).code.replace(/\d+$/, '')]);
+  AP.filter = code; AP.matches = (code ? all.filter(([, c]) => c === code) : all).map(([i]) => i);
+  if (!AP.matches.length) return status(`У пісні немає секції «${SEC_TYPES[code]}», яку можна повторити`);
+  AP.src = new Set(); AP.where = 'cursor';
+  if (preselect != null) AP.src.add(preselect); else if (code && AP.matches.length === 1) AP.src.add(AP.matches[0]);
+  setEditPane('struct'); renderAddPanel(); $('#addPanel').hidden = false; $('#addPanel').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+function renderAddPanel() {
+  $('#apTitle').textContent = AP.filter ? `Додати ще один: ${SEC_TYPES[AP.filter]}` : 'Додати копію секції';
+  const grid = $('#apSrc'); grid.innerHTML = '';
+  AP.matches.forEach((i) => {
+    const m = E.markers[i], next = E.markers[i + 1] ? E.markers[i + 1].t : E.dur, info = secInfo(m.name);
+    const b = document.createElement('div'); b.className = 'ap-i' + (AP.src.has(i) ? ' on' : ''); b.style.setProperty('--c', info.color); b.tabIndex = 0;
+    b.innerHTML = `<span class="sb">${info.code}</span><span class="ap-t"><b></b><small>${fmt(m.t)} · ${fmt(next - m.t)}</small></span><button class="ib pv" title="Послухати цю секцію"><svg class="ic fill"><use href="#i-play"/></svg></button><span class="ap-n"></span>`;
+    $('b', b).textContent = m.name || `секція ${i + 1}`;
+    b.onclick = () => { AP.src.has(i) ? AP.src.delete(i) : AP.src.add(i); renderAddPanel(); };
+    $('.pv', b).onclick = (e) => { e.stopPropagation(); E.queue = null; seek(m.t); if (!E.playing) play(); };
+    grid.append(b);
+  });
+  const ci = sectionIndexAt(position()), cm = E.markers[ci];
+  $('#apCursorName').textContent = cm ? `«${cm.name || 'секція'}» ${fmt(cm.t)}` : 'в кінець';
+  document.querySelectorAll('#apWhere button').forEach((b) => b.classList.toggle('on', b.dataset.w === AP.where));
+  const af = $('#apAfter'); af.hidden = AP.where !== 'after';
+  if (!af.options.length || af.dataset.n !== String(E.markers.length)) { af.innerHTML = ''; af.dataset.n = E.markers.length; E.markers.forEach((m, i) => af.append(new Option(`${i + 1}. ${m.name || 'секція'} · ${fmt(m.t)}`, i))); }
+  $('#apAdd').disabled = !AP.src.size;
+  $('#apAdd').textContent = AP.src.size > 1 ? `Додати ${AP.src.size} секції` : 'Додати';
+}
+function insertCopies(srcs, afterIdx, preview = true) {
+  if (guardLock()) return; const list = [...srcs].sort((x, y) => x - y); if (!list.length) return;
+  const a = curArr(); const copies = list.map((i) => ({ ...a[i] }));
+  a.splice(afterIdx + 1, 0, ...copies); commitArr(a);
+  status(`Додано: ${copies.map((c) => c.name || 'секція').join(', ')}${preview ? ' · прослуховую стик…' : ''}`);
+  if (preview) previewJoinAt(afterIdx + 1);
+}
+function applyAddPanel() {
+  if (!AP.src.size) return status('Оберіть секцію, яку повторити');
+  let after; const last = E.markers.length - 1;
+  if (AP.where === 'start') after = -1; else if (AP.where === 'end') after = last; else if (AP.where === 'after') after = +$('#apAfter').value;
+  else { after = sectionIndexAt(position()); if (after < 0) after = last; }
+  const srcs = [...AP.src]; $('#addPanel').hidden = true; insertCopies(srcs, after, $('#apPreview').checked);
 }
 function previewJoinAt(i) { const m = E.markers[i]; if (!m) return; seek(Math.max(0, m.t - 4)); if (!E.playing) play(); }
 function previewNextJoin() {
@@ -643,7 +681,7 @@ function renderStructure() {
       <span class="sb"></span><input class="sn" placeholder="Назва секції" spellcheck="false"><span class="dur"></span><span class="rng"></span>
       <span class="acts">
         <button class="ib go" title="Перейти">${I('play', 'fill')}</button><button class="ib up" title="Вгору">${I('up')}</button><button class="ib dn" title="Вниз">${I('down')}</button>
-        <button class="ib dup" title="Дублювати — повторити секцію">${I('copy')}</button><button class="ib ss" title="Початок секції = позиція курсору">${I('anchor')}</button>
+        <button class="ib cp" title="Вставити копію цієї секції в інше місце…">${I('plus')}</button><button class="ib dup" title="Дублювати поруч">${I('copy')}</button><button class="ib ss" title="Початок секції = позиція курсору">${I('anchor')}</button>
         <button class="ib mg" title="Об’єднати з наступною">${I('merge')}</button><button class="ib del" title="Видалити секцію">${I('trash')}</button>
       </span>`;
     $('.ck', row).onclick = (e) => { e.stopPropagation(); if (e.shiftKey && E.lastSel != null) selectSection(i, e); else { E.sel.has(i) ? E.sel.delete(i) : E.sel.add(i); E.lastSel = i; refreshSel(); } };
@@ -654,6 +692,7 @@ function renderStructure() {
     $('.dur', row).textContent = fmt(next - m.t); $('.rng', row).textContent = `${fmt(m.t)} – ${fmt(next)}`;
     $('.go', row).onclick = () => { E.queue = null; seek(m.t); };
     $('.up', row).onclick = () => opMove(i, -1); $('.dn', row).onclick = () => opMove(i, 1);
+    $('.cp', row).onclick = () => openAddPanel(null, i);
     $('.dup', row).onclick = () => opDup(i); $('.ss', row).onclick = () => opSetStart(i);
     $('.mg', row).onclick = () => opMergeNext(i); $('.del', row).onclick = () => opDelete(i);
     row.ondragstart = (e) => { e.dataTransfer.setData('text/plain', String(i)); e.dataTransfer.effectAllowed = 'move'; row.classList.add('drag'); };
@@ -1181,7 +1220,7 @@ async function transformStems(semi, tempo, stems = E.stems, progress = null) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181619', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181703', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -1219,6 +1258,11 @@ $('#btnDetect').onclick = () => { if (S.arr[E.song?.id] && !confirm('Струк�
 $('#btnSplit').onclick = () => opSplit();
 document.querySelectorAll('#quickAdd [data-c]').forEach((b) => (b.onclick = () => quickAdd(b.dataset.c)));
 $('#joinPrev').onclick = previewNextJoin;
+$('#apClose').onclick = $('#apCancel').onclick = () => { $('#addPanel').hidden = true; };
+$('#apAdd').onclick = applyAddPanel;
+document.querySelectorAll('#apWhere button').forEach((b) => (b.onclick = () => { AP.where = b.dataset.w; renderAddPanel(); }));
+$('#apAfter').onchange = () => {};
+$('#estSelCopy').onclick = () => { const srcs = [...E.sel]; if (!srcs.length) return; let after = sectionIndexAt(position()); if (after < 0) after = E.markers.length - 1; insertCopies(srcs, after, true); };
 $('#xfMode').value = S.xfMode; $('#xfMode').onchange = (e) => { S.xfMode = e.target.value; save('xfMode'); if (S.arr[E.song?.id]) { rebuildMarkers(); status('Плавність стиків оновлено'); } };
 $('#btnUndo').onclick = undoArr; $('#btnResetStruct').onclick = resetStructure;
 $('#chkDetect').checked = S.autoDetect; $('#chkDetect').onchange = (e) => { S.autoDetect = e.target.checked; save('autoDetect'); };
