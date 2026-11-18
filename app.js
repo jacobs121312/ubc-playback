@@ -6,7 +6,7 @@ const store = {
   set(k, v) { localStorage.setItem('pb.' + k, JSON.stringify(v)); },
 };
 const S = {
-  clientId: store.get('clientId', '403195791032-2167k60jjh457umlg20siumv0iu0ogph.apps.googleusercontent.com'), rootFolder: store.get('rootFolder', ''),
+  clientId: store.get('clientId', '403195791032-2167k60jjh457umlg20siumv0iu0ogph.apps.googleusercontent.com'), rootFolder: store.get('rootFolder', '1BkSjNmnFBXQtSnrepYwf5VNcxrVOXXAZ'),
   deviceId: store.get('deviceId', ''), outCount: store.get('outCount', 0),
   patch: store.get('patch', {}), outNames: store.get('outNames', []), setlist: store.get('setlist', []),
   index: store.get('index', {}),
