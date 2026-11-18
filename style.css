@@ -77,3 +77,6 @@ select.inline{width:auto}
 .padkeys{display:grid;grid-template-columns:repeat(6,64px);gap:8px;margin:12px 0 16px}
 .padkeys button{height:56px;font-size:16px;font-weight:600}
 .list li button.up,.list li button.dn{padding:1px 6px;font-size:10px}
+.xf{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--dim)}
+.xf input[type=range]{width:90px}
+.xf b{color:var(--fg);min-width:36px;font-variant-numeric:tabular-nums}

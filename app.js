@@ -12,7 +12,7 @@ const S = {
   index: store.get('index', {}),
   markers: store.get('markers', {}), trim: store.get('trim', {}), mix: store.get('mix', {}),
   presets: store.get('presets', {}), pad: store.get('pad', { out: [0, 1], vol: 0.5, key: 'C' }),
-  autoAdvance: store.get('autoAdvance', true),
+  autoAdvance: store.get('autoAdvance', true), xform: store.get('xform', {}),
 };
 const save = (k) => store.set(k, S[k]);
 const status = (t) => { $('#status').textContent = t; };
@@ -20,7 +20,7 @@ const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
 const key = (n) => n.trim().toLowerCase();
 
 // ───────────── Audio engine ─────────────
-const E = { markers: [], ctx: null, merger: null, master: null, nOut: 2, maxOut: 2, stems: [], song: null,
+const E = { tempo: 1, markers: [], ctx: null, merger: null, master: null, nOut: 2, maxOut: 2, stems: [], song: null,
   playing: false, pos: 0, startedAt: 0, sources: [], dur: 0, masterVol: 1 };
 
 async function initAudio() {
@@ -74,8 +74,8 @@ function setPatch(name, routes) {
 }
 
 const trimOf = () => S.trim[E.song?.id] || {};
-const startPos = () => trimOf().start || 0;
-const endPos = () => Math.min(trimOf().end || E.dur, E.dur);
+const startPos = () => (trimOf().start || 0) / E.tempo;
+const endPos = () => (trimOf().end ? Math.min(trimOf().end / E.tempo, E.dur) : E.dur);
 function position() {
   if (E.pendingJump && E.ctx.currentTime >= E.pendingJump.tb) { E.startedAt = E.pendingJump.tb - E.pendingJump.target; E.pendingJump = null; }
   return E.playing ? Math.min(E.ctx.currentTime - E.startedAt, E.dur) : E.pos;
@@ -290,7 +290,7 @@ function demoSong() {
 
 // ───────────── Song loading / setlist ─────────────
 let current = null;
-async function loadSong(song) {
+async function loadSong(song, xf = S.xform[song.id]) {
   stop(); current = song; renderLibrary(); renderSetlist();
   $('#songName').textContent = song.name; $('#songMeta').textContent = 'завантаження…';
   try {
@@ -306,11 +306,14 @@ async function loadSong(song) {
       return { ...it, segs, channels: it.channels || segs[0].buffer.numberOfChannels, vol: sv?.vol ?? it.vol ?? 1, mute: sv?.mute ?? it.mute ?? false, solo: false };
     });
     E.dur = extra.dur || Math.max(...E.stems.flatMap((s) => s.segs.map((g) => g.t + g.d)));
+    E.tempo = 1;
+    if (xf && (xf.semi || xf.tempo !== 1)) await transformStems(xf.semi, xf.tempo);
+    if (current !== song) return;
     E.ablMarkers = extra.markers || []; rebuildMarkers(); E.pos = startPos(); showTrim();
     E.stems.forEach(buildStemNodes);
     $('#songMeta').textContent = `${E.stems.length} стемів · ${fmt(E.dur)}` + (extra.tempo ? ` · ${extra.tempo} BPM` : '');
     renderMarkers(); renderReport(extra.warnings || []);
-    status('Готово'); renderMixer(); renderMatrix();
+    syncXform(); status('Готово'); renderMixer(); renderMatrix();
   } catch (e) { $('#songMeta').textContent = 'помилка: ' + e.message; status('Помилка: ' + e.message); }
 }
 function advance(d, autoplay) {
@@ -396,7 +399,7 @@ function patchAll(fn) {
 
 function rebuildMarkers() {
   const mine = (S.markers[E.song?.id] || []);
-  E.markers = [...(E.ablMarkers || []), ...mine].sort((a, b) => a.t - b.t);
+  E.markers = [...(E.ablMarkers || []), ...mine].map((m) => ({ ...m, t0: m.t, t: m.t / E.tempo })).sort((a, b) => a.t - b.t);
   renderMarkers();
 }
 function renderMarkers() {
@@ -408,7 +411,7 @@ function renderMarkers() {
     b.onclick = () => { if (E.playing) { E.queue = m.t; renderMarkers(); } else seek(m.t); };
     b.ondblclick = () => { E.queue = null; seek(m.t); renderMarkers(); };
     b.oncontextmenu = (e) => {
-      e.preventDefault(); const mine = S.markers[E.song.id] || []; const k = mine.findIndex((x) => x.t === m.t && x.name === m.name);
+      e.preventDefault(); const mine = S.markers[E.song.id] || []; const k = mine.findIndex((x) => x.t === m.t0 && x.name === m.name);
       if (k >= 0) { mine.splice(k, 1); S.markers[E.song.id] = mine; save('markers'); rebuildMarkers(); }
     };
     box.append(b);
@@ -417,7 +420,7 @@ function renderMarkers() {
 function markCurrentSection() {
   if (!E.song) return;
   const name = prompt('Назва секції (Verse, Chorus, Bridge…)', ''); if (name === null) return;
-  const m = S.markers[E.song.id] ||= []; m.push({ t: Math.round(position() * 100) / 100, name: name.trim() });
+  const m = S.markers[E.song.id] ||= []; m.push({ t: Math.round(position() * E.tempo * 100) / 100, name: name.trim() });
   save('markers'); rebuildMarkers();
 }
 function saveMix() {
@@ -550,6 +553,59 @@ $('#clientId').value = S.clientId; $('#rootFolder').value = S.rootFolder;
 $('#btnSaveDrive').onclick = () => { S.clientId = $('#clientId').value.trim(); S.rootFolder = $('#rootFolder').value.trim(); save('clientId'); save('rootFolder'); status('Збережено'); };
 addEventListener('keydown', (e) => { if (e.code === 'Space' && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) { e.preventDefault(); E.playing ? pause() : play(); } });
 
+// ── Key / tempo change (offline, SoundTouch in workers) ──
+const NO_PITCH = /click|metronome|метроном|guide|cue|гайд/i;     // click & guide keep their pitch, only follow tempo
+function runWorker(w, buf, semi, tempo) {
+  return new Promise((res, rej) => {
+    w.onmessage = (e) => {
+      const ch = e.data.channels, nb = E.ctx.createBuffer(ch.length, ch[0].length, buf.sampleRate);
+      ch.forEach((c, i) => nb.copyToChannel(c, i)); res(nb);
+    };
+    w.onerror = (e) => rej(new Error(e.message || 'worker error'));
+    const chans = Array.from({ length: buf.numberOfChannels }, (_, i) => buf.getChannelData(i).slice());
+    w.postMessage({ channels: chans, sampleRate: buf.sampleRate, semitones: semi, tempo }, chans.map((c) => c.buffer));
+  });
+}
+async function transformStems(semi, tempo) {
+  const jobs = new Map();                                    // buffer -> Map(noPitch -> processed buffer)
+  E.stems.forEach((st) => st.segs.forEach((g) => {
+    const f = NO_PITCH.test(st.name); if (!jobs.has(g.buffer)) jobs.set(g.buffer, new Map()); jobs.get(g.buffer).set(f, null);
+  }));
+  const queue = [...jobs].flatMap(([buf, m]) => [...m.keys()].map((f) => ({ buf, f })));
+  const total = queue.length; let done = 0; const t0 = performance.now();
+  const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
+  await Promise.all(Array.from({ length: N }, async () => {
+    const w = new Worker('stretch-worker.js', { type: 'module' });
+    try {
+      while (queue.length) {
+        const { buf, f } = queue.shift();
+        jobs.get(buf).set(f, await runWorker(w, buf, f ? 0 : semi, tempo));
+        status(`Зміна тональності/темпу: ${++done}/${total}`);
+      }
+    } finally { w.terminate(); }
+  }));
+  E.stems.forEach((st) => {
+    const f = NO_PITCH.test(st.name);
+    st.segs = st.segs.map((g) => ({ ...g, t: g.t / tempo, d: g.d / tempo, off: g.off / tempo, buffer: jobs.get(g.buffer).get(f) }));
+  });
+  E.dur /= tempo; E.tempo = tempo;
+  status(`Готово за ${((performance.now() - t0) / 1000).toFixed(1)} с`);
+}
+function syncXform() {
+  const x = S.xform[current?.id] || { semi: 0, tempo: 1 };
+  $('#xSemi').value = x.semi; $('#xTempo').value = Math.round(x.tempo * 100); $('#xTempoVal').textContent = Math.round(x.tempo * 100) + '%';
+}
+for (let i = -6; i <= 6; i++) $('#xSemi').append(new Option(i > 0 ? '+' + i : String(i), i));
+$('#xSemi').value = 0;
+$('#xTempo').oninput = (e) => { $('#xTempoVal').textContent = e.target.value + '%'; };
+$('#xApply').onclick = () => {
+  if (!current) return;
+  const x = { semi: +$('#xSemi').value, tempo: +$('#xTempo').value / 100 };
+  if (x.semi || x.tempo !== 1) S.xform[current.id] = x; else delete S.xform[current.id];
+  save('xform'); loadSong(current, x);
+};
+$('#xReset').onclick = () => { if (!current) return; delete S.xform[current.id]; save('xform'); loadSong(current, null); };
+
 // ── Section / trim / transport extras ──
 $('#btnLoop').onclick = () => { E.loop = !E.loop; $('#btnLoop').classList.toggle('on', E.loop); };
 $('#btnMark').onclick = markCurrentSection;
@@ -559,9 +615,9 @@ function nextSection() {
   if (!nx) return; if (E.playing) { E.queue = nx.start; renderMarkers(); } else seek(nx.start);
 }
 const setTrim = (patch) => { if (!E.song) return; S.trim[E.song.id] = { ...trimOf(), ...patch }; save('trim'); showTrim(); };
-function showTrim() { const t = trimOf(); $('#trimInfo').textContent = t.start || t.end ? `обрізка: ${fmt(t.start || 0)}–${fmt(t.end || E.dur)}` : ''; }
-$('#btnStartHere').onclick = () => setTrim({ start: Math.round(position() * 100) / 100 });
-$('#btnEndHere').onclick = () => setTrim({ end: Math.round(position() * 100) / 100 });
+function showTrim() { const t = trimOf(); $('#trimInfo').textContent = t.start || t.end ? `обрізка: ${fmt(startPos())}–${fmt(endPos())}` : ''; }
+$('#btnStartHere').onclick = () => setTrim({ start: Math.round(position() * E.tempo * 100) / 100 });
+$('#btnEndHere').onclick = () => setTrim({ end: Math.round(position() * E.tempo * 100) / 100 });
 $('#btnClearTrim').onclick = () => { if (E.song) { delete S.trim[E.song.id]; save('trim'); showTrim(); } };
 $('#chkAuto').checked = S.autoAdvance; $('#chkAuto').onchange = (e) => { S.autoAdvance = e.target.checked; save('autoAdvance'); };
 $('#btnFade').onclick = () => fadeOutStop(3);

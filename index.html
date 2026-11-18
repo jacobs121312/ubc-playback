@@ -56,6 +56,11 @@
       <button id="btnEndHere" title="Пісня закінчиться тут">⇥ Кінець тут</button>
       <button id="btnClearTrim" title="Скинути початок/кінець">✕ обрізка</button>
       <small id="trimInfo"></small>
+      <span class="xf" title="Зміна тональності та темпу (обробка офлайн, 10–60 с). Click і Guide не транспонуються.">
+        Тон <select id="xSemi" class="inline"></select>
+        Темп <input id="xTempo" type="range" min="70" max="130" step="1" value="100"><b id="xTempoVal">100%</b>
+        <button id="xApply">Застосувати</button><button id="xReset">Скинути</button>
+      </span>
       <label class="chk"><input type="checkbox" id="chkAuto"> Авто-перехід</label>
       <button id="btnFade" title="Плавно затухнути за 3 с і зупинити">Fade out</button>
       <button id="btnExport" title="Зберегти стеми як WAV у папку (напр. синхронізовану з Drive)">⬇ Експорт стемів</button>
