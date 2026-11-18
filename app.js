@@ -1,7 +1,7 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { startHost, loadScript } from './remote-host.js?v=202611181546';
-import { detectSections } from './guide.js?v=202611181546';
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181546';
+import { startHost, loadScript } from './remote-host.js?v=202611181604';
+import { detectSections } from './guide.js?v=202611181604';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181604';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -17,7 +17,7 @@ const S = {
   sundays: store.get('sundays', []), activeSunday: store.get('activeSunday', null), memMode: store.get('memMode', 'economy'),
   clicks: store.get('clicks', {}), songPad: store.get('songPad', {}),
   remote: store.get('remote', { on: false, id: null, pin: null }),
-  ver: store.get('ver', {}), pinned: store.get('pinned', {}), fade: store.get('fade', {}),
+  xfMode: store.get('xfMode', 'mid'), ver: store.get('ver', {}), pinned: store.get('pinned', {}), fade: store.get('fade', {}),
   arr: store.get('arr', {}), trans: store.get('trans', {}), autoDetect: store.get('autoDetect', true),
   autoAdvance: store.get('autoAdvance', true), preload: store.get('preload', true), xform: store.get('xform', {}),
 };
@@ -137,6 +137,7 @@ async function play(lead = 0.12) {
   syncPlayBtn();
 }
 // Schedule a stem's segments on any (Offline)AudioContext. t0 = ctx time that corresponds to song position pos.
+const CURVE_IN = Float32Array.from({ length: 48 }, (_, i) => Math.sin((i / 47) * Math.PI / 2)), CURVE_OUT = Float32Array.from({ length: 48 }, (_, i) => Math.cos((i / 47) * Math.PI / 2));
 function schedule(ctx, st, dest, t0, pos) {
   const out = [];
   for (const sg of st.segs) {
@@ -145,10 +146,15 @@ function schedule(ctx, st, dest, t0, pos) {
     if (dur < 0.002) continue;
     const when = t0 + (sg.t + skip - pos);
     const src = ctx.createBufferSource(); src.buffer = sg.buffer; src.playbackRate.value = sg.rate;
-    if (sg.cutIn || sg.cutOut) {
+    let fi = sg.fi ?? (sg.cutIn ? 0.003 : 0), fo = sg.fo ?? (sg.cutOut ? 0.003 : 0);
+    if (fi + fo > dur * 0.9) { const k = (dur * 0.9) / (fi + fo); fi *= k; fo *= k; }
+    if ((fi && skip === 0) || fo) {
       const g = ctx.createGain(); src.connect(g); g.connect(dest);
-      if (sg.cutIn && skip === 0) { g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(1, when + 0.003); }
-      if (sg.cutOut) { g.gain.setValueAtTime(1, when + dur - 0.003); g.gain.linearRampToValueAtTime(0, when + dur); }
+      if (fi && skip === 0) {                       // equal-power fade in (long) or short linear ramp
+        g.gain.value = 0;
+        if (fi > 0.01) g.gain.setValueCurveAtTime(CURVE_IN, when, fi); else { g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(1, when + fi); }
+      }
+      if (fo) { const at = when + dur - fo; if (fo > 0.01) g.gain.setValueCurveAtTime(CURVE_OUT, at, fo); else { g.gain.setValueAtTime(1, at); g.gain.linearRampToValueAtTime(0, when + dur); } }
     } else src.connect(dest);
     src.start(when, sg.off + skip * sg.rate, dur * sg.rate);
     out.push(src);
@@ -520,14 +526,14 @@ function baseSections() {                       // seconds of the ORIGINAL (temp
   const m = baseMarkers(); if (!m.length) return [];
   const end = E.baseDur * E.tempo, out = [];
   if (m[0].t > 1) out.push({ from: 0, to: m[0].t, name: '' });
-  m.forEach((x, i) => out.push({ from: x.t, to: i + 1 < m.length ? m[i + 1].t : end, name: x.name }));
+  m.forEach((x, i) => out.push({ from: i === 0 && x.t <= 1 ? 0 : x.t, to: i + 1 < m.length ? m[i + 1].t : end, name: x.name }));   // a short lead-in belongs to the first section
   return out.filter((x) => x.to - x.from > 0.05);
 }
 function mergeSegs(list) {
   list.sort((x, y) => x.t - y.t); const out = [];
   for (const g of list) {
     const p = out[out.length - 1];
-    if (p && p.buffer === g.buffer && Math.abs(g.rate - p.rate) < 1e-6 && Math.abs(g.t - (p.t + p.d)) < 1e-3 && Math.abs(g.off - (p.off + p.d * p.rate)) < 2e-3) { p.d += g.d; p.cutOut = g.cutOut; }
+    if (p && p.buffer === g.buffer && Math.abs(g.rate - p.rate) < 1e-6 && Math.abs(g.t - (p.t + p.d)) < 1e-3 && Math.abs(g.off - (p.off + p.d * p.rate)) < 2e-3) { p.d += g.d; p.cutOut = g.cutOut; p.fo = g.fo; }
     else out.push({ ...g });
   }
   return out;
@@ -538,19 +544,27 @@ function rebuildMarkers() {
   if (arr && arr.length) {
     let V = 0;
     const items = arr.map((it) => { const a = it.from / T, b = it.to / T, v = V; V += b - a; return { a, b, v, it }; });
+    const XFS = { short: 0.012, mid: 0.03, long: 0.08 }[S.xfMode] || 0.03;
+    E.joins = items.map((x, idx) => ({ x, idx })).filter(({ x, idx }) => idx > 0 && Math.abs(items[idx - 1].b - x.a) > 1e-6).map(({ x }) => x.v);
     E.stems.forEach((st) => {
-      const out = [];
+      const out = [], jx = /click|metronome|метроном|guide|cue|гайд/i.test(st.name) ? 0.004 : XFS;   // click/guide keep sharp transients
       items.forEach((x, idx) => {
+        const contigPrev = idx > 0 && Math.abs(items[idx - 1].b - x.a) < 1e-6, contigNext = idx < items.length - 1 && Math.abs(items[idx + 1].a - x.b) < 1e-6;
         for (const g of st.baseSegs) {
           const s0 = Math.max(g.t, x.a), e0 = Math.min(g.t + g.d, x.b); if (e0 - s0 < 0.002) continue;
-          out.push({ ...g, t: x.v + (s0 - x.a), d: e0 - s0, off: g.off + (s0 - g.t) * g.rate,
-            cutIn: s0 > g.t + 1e-6 || idx > 0 || g.cutIn, cutOut: e0 < g.t + g.d - 1e-6 || idx < items.length - 1 || g.cutOut });
+          const joinIn = idx > 0 && !contigPrev && Math.abs(s0 - x.a) < 1e-6, joinOut = idx < items.length - 1 && !contigNext && Math.abs(e0 - x.b) < 1e-6;
+          const offS = g.off + (s0 - g.t) * g.rate;
+          const pre = joinIn ? Math.max(0, Math.min(jx, s0 - g.t, offS / g.rate)) : 0;       // pre-roll: incoming audio fades in just BEFORE the downbeat, so the downbeat itself is at full level
+          out.push({ ...g, t: x.v + (s0 - x.a) - pre, d: e0 - s0 + pre, off: offS - pre * g.rate,
+            cutIn: s0 > g.t + 1e-6 || (idx > 0 && !contigPrev) || g.cutIn, cutOut: e0 < g.t + g.d - 1e-6 || (idx < items.length - 1 && !contigNext) || g.cutOut,
+            fi: pre > 0 ? pre : undefined, fo: joinOut ? jx : undefined });
         }
       });
       st.segs = mergeSegs(out);
     });
     E.dur = V; E.markers = items.map((x) => ({ t: x.v, name: x.it.name, t0: x.it.from }));
   } else {
+    E.joins = [];
     E.stems.forEach((st) => { st.segs = st.baseSegs; }); E.dur = E.baseDur;
     E.markers = baseSections().map((x) => ({ t: x.from / T, name: x.name, t0: x.from }));
   }
@@ -575,6 +589,22 @@ function undoArr() {
 }
 const curArr = () => (S.arr[E.song?.id] ? S.arr[E.song.id].map((x) => ({ ...x })) : baseSections());
 function opDelete(i) { if (guardLock()) return; const a = curArr(); if (a.length <= 1) return status('Не можна видалити останню секцію'); const [r] = a.splice(i, 1); commitArr(a); status(`Видалено «${r.name || 'секція'}» · скасувати: EDIT → ↶ або Cmd+Z`); }
+function opInsertCopy(src, after) { const a = curArr(); if (src < 0 || src >= a.length) return -1; a.splice(after + 1, 0, { ...a[src] }); commitArr(a); return after + 1; }
+const SEC_TYPES = { C: 'приспів', V: 'куплет', B: 'брідж', Pc: 'пре-приспів', Tg: 'тег' };
+function quickAdd(code) {
+  if (guardLock()) return;
+  if (!E.markers.length) return status('Спершу додайте або визначте секції');
+  const idx = E.markers.map((m, i) => [i, secInfo(m.name).code.replace(/\d+$/, '')]).filter(([, c]) => c === code).map(([i]) => i);
+  if (!idx.length) return status(`У пісні немає секції «${SEC_TYPES[code]}», яку можна повторити`);
+  const src = idx[idx.length - 1]; let after = sectionIndexAt(position()); if (after < 0) after = E.markers.length - 1;
+  const at = opInsertCopy(src, after); if (at < 0) return;
+  status(`Додано ще один ${SEC_TYPES[code]} після секції ${after + 1}. Прослуховую з'єднання…`); previewJoinAt(at);
+}
+function previewJoinAt(i) { const m = E.markers[i]; if (!m) return; seek(Math.max(0, m.t - 4)); if (!E.playing) play(); }
+function previewNextJoin() {
+  if (!E.joins?.length) return status('Немає стиків: структура не змінена або секції йдуть підряд');
+  const p = position(), nx = E.joins.find((t) => t > p + 0.5) ?? E.joins[0]; seek(Math.max(0, nx - 4)); if (!E.playing) play();
+}
 function opDup(i) { const a = curArr(); a.splice(i + 1, 0, { ...a[i] }); commitArr(a); }
 function opMove(i, d) { const a = curArr(), j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; commitArr(a); }
 function opRename(i, name) { const a = curArr(); a[i].name = name; commitArr(a, { soft: true }); }
@@ -1087,7 +1117,7 @@ async function transformStems(semi, tempo, stems = E.stems, progress = null) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181546', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181604', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -1123,6 +1153,9 @@ $('#btnLoop').onclick = () => { E.loop = !E.loop; $('#btnLoop').classList.toggle
 $('#btnMark').onclick = markCurrentSection;
 $('#btnDetect').onclick = () => { if (S.arr[E.song?.id] && !confirm('Структуру вже змінено вручну. Визначити заново й скинути правки?')) return; detectGuide(false); };
 $('#btnSplit').onclick = () => opSplit();
+document.querySelectorAll('#quickAdd [data-c]').forEach((b) => (b.onclick = () => quickAdd(b.dataset.c)));
+$('#joinPrev').onclick = previewNextJoin;
+$('#xfMode').value = S.xfMode; $('#xfMode').onchange = (e) => { S.xfMode = e.target.value; save('xfMode'); if (S.arr[E.song?.id]) { rebuildMarkers(); status('Плавність стиків оновлено'); } };
 $('#btnUndo').onclick = undoArr; $('#btnResetStruct').onclick = resetStructure;
 $('#chkDetect').checked = S.autoDetect; $('#chkDetect').onchange = (e) => { S.autoDetect = e.target.checked; save('autoDetect'); };
 addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.code === 'KeyZ' && !/INPUT|TEXTAREA/.test(e.target.tagName)) { e.preventDefault(); undoArr(); } });

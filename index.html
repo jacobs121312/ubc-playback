@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181546">
+<link rel="stylesheet" href="style.css?v=202611181604">
 </head>
 <body>
 <div id="home" class="screen">
@@ -169,6 +169,16 @@
         <button id="btnResetStruct" title="Повернути початкову структуру">Скинути</button>
       </div>
       <label class="chk"><input type="checkbox" id="chkDetect"> Автоматично визначати секції по Guide для пісень без розмітки (перший раз завантажується модель ~40 МБ)</label>
+      <div class="row" id="quickAdd">
+        <b style="font-size:12px;color:var(--dim)">Додати ще один:</b>
+        <button data-c="C">＋ Приспів</button><button data-c="V">＋ Куплет</button><button data-c="B">＋ Брідж</button><button data-c="Pc">＋ Пре-приспів</button><button data-c="Tg">＋ Тег</button>
+        <small class="hint">копія останньої такої секції вставляється після секції під курсором і одразу програється зі стику</small>
+      </div>
+      <div class="row">
+        <button id="joinPrev" title="Програти з 4 с до наступного стику">▶ Прослухати стики</button>
+        <label class="chk">Плавність стиків
+          <select id="xfMode" class="inline"><option value="short">різка (12 мс)</option><option value="mid">звичайна (30 мс)</option><option value="long">м'яка (80 мс)</option></select></label>
+      </div>
       <div id="structList" class="structlist"></div>
       <p class="hint">Правки структури змінюють саму пісню: видалена секція не гратиме, дубльована повториться, порядок можна міняти. «⇤» ставить початок секції в позицію курсору. Експорт стемів теж бере вже змінену структуру. Початок/кінець нижче діє, поки структуру не змінено.</p>
       <h3>Версії та закріплення</h3>
@@ -314,6 +324,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181546"></script>
+<script type="module" src="app.js?v=202611181604"></script>
 </body>
 </html>
