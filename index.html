@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181722">
+<link rel="stylesheet" href="style.css?v=202611181728">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -63,7 +63,21 @@
     <section class="card2">
       <h2><span class="n">3</span> Сетліст <small id="bTitle"></small></h2>
       <div class="builder">
-        <div><input id="bSearch" placeholder="Пошук у бібліотеці…"><ul id="bLib" class="list"></ul></div>
+        <div>
+          <input id="bSearch" placeholder="Пошук у бібліотеці…">
+          <button id="bQuickBtn" class="btn ghost sm bq-btn" type="button">＋ Немає потрібної пісні? Додати без плейбеку</button>
+          <div id="bQuick" class="bquick" hidden>
+            <label>Назва пісні<input id="qaName" placeholder="Напр. «Святий Святий»" autocomplete="off"></label>
+            <div class="qa-row">
+              <label>Темп, BPM<span class="qa-bpm"><input id="qaBpm" type="number" min="30" max="300" step="0.5" value="72"><button id="qaTap" type="button" class="btn sm">Tap</button></span></label>
+              <label>Розмір<select id="qaSig"><option>4/4</option><option>3/4</option><option>2/4</option><option>5/4</option><option>6/8</option><option>12/8</option></select></label>
+              <label>Дрон-пад<select id="qaKey"><option value="">без паду</option></select></label>
+            </div>
+            <label class="sw" id="qaAutoRow" hidden><input type="checkbox" id="qaAuto" checked><span class="trk"></span><span class="lbl">Пад стартує разом із піснею</span></label>
+            <div class="row" style="margin:6px 0 0"><button id="qaAdd" class="btn solid" type="button">Додати в сетліст</button><button id="qaCancel" class="btn ghost" type="button">Скасувати</button></div>
+          </div>
+          <ul id="bLib" class="list"></ul>
+        </div>
         <div><div class="hint" style="margin-bottom:8px">Порядок у службі (▲▼ — міняти порядок)</div><ul id="bSet" class="list"></ul></div>
       </div>
     </section>
@@ -454,6 +468,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181723"></script>
+<script type="module" src="app.js?v=202611181728"></script>
 </body>
 </html>
