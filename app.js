@@ -1,4 +1,5 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -16,7 +17,7 @@ const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
 const key = (n) => n.trim().toLowerCase();
 
 // ───────────── Audio engine ─────────────
-const E = { ctx: null, merger: null, master: null, nOut: 2, maxOut: 2, stems: [], song: null,
+const E = { markers: [], ctx: null, merger: null, master: null, nOut: 2, maxOut: 2, stems: [], song: null,
   playing: false, pos: 0, startedAt: 0, sources: [], dur: 0, masterVol: 1 };
 
 async function initAudio() {
@@ -53,7 +54,7 @@ function applyRoutes(st) {
   st.split.disconnect();
   (st.mixers ||= []).forEach((m) => m.disconnect()); st.mixers = [];
   const routes = routesFor(st.name);
-  const stereo = st.buffer.numberOfChannels > 1;
+  const stereo = st.channels > 1;
   if (stereo && routes.length === 1) {           // stereo -> single output: sum L+R at -6 dB each
     const h = E.ctx.createGain(); h.gain.value = 0.5; st.mixers.push(h);
     st.split.connect(h, 0); st.split.connect(h, 1); h.connect(E.merger, 0, routes[0]);
@@ -75,15 +76,32 @@ async function play() {
   await E.ctx.resume();
   const t0 = E.ctx.currentTime + 0.12;
   if (E.pos >= E.dur - 0.05) E.pos = 0;
-  E.sources = E.stems.map((st) => {
-    const src = E.ctx.createBufferSource(); src.buffer = st.buffer; src.connect(st.g);
-    src.start(t0, E.pos); return src;
-  });
+  E.sources = E.stems.flatMap((st) => schedule(E.ctx, st, st.g, t0, E.pos));
   E.startedAt = t0 - E.pos; E.playing = true;
-  const mine = E.sources;
-  mine[0].onended = () => { if (E.sources === mine && E.playing && position() >= E.dur - 0.2) { stop(); advance(1, true); } };
   syncPlayBtn();
 }
+// Schedule a stem's segments on any (Offline)AudioContext. t0 = ctx time that corresponds to song position pos.
+function schedule(ctx, st, dest, t0, pos) {
+  const out = [];
+  for (const sg of st.segs) {
+    if (sg.t + sg.d <= pos) continue;
+    const skip = Math.max(0, pos - sg.t), dur = sg.d - skip;
+    if (dur < 0.002) continue;
+    const when = t0 + (sg.t + skip - pos);
+    const src = ctx.createBufferSource(); src.buffer = sg.buffer; src.playbackRate.value = sg.rate;
+    if (sg.cutIn || sg.cutOut) {
+      const g = ctx.createGain(); src.connect(g); g.connect(dest);
+      if (sg.cutIn && skip === 0) { g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(1, when + 0.003); }
+      if (sg.cutOut) { g.gain.setValueAtTime(1, when + dur - 0.003); g.gain.linearRampToValueAtTime(0, when + dur); }
+    } else src.connect(dest);
+    src.start(when, sg.off + skip * sg.rate, dur * sg.rate);
+    out.push(src);
+  }
+  return out;
+}
+setInterval(() => {          // end-of-song detection (works even if tab is in background)
+  if (E.playing && position() >= E.dur - 0.05) { stop(); advance(1, true); }
+}, 200);
 function halt() { E.sources.forEach((s) => { s.onended = null; try { s.stop(); } catch {} }); E.sources = []; }
 function pause() { if (!E.playing) return; E.pos = position(); halt(); E.playing = false; syncPlayBtn(); }
 function stop() { halt(); E.playing = false; E.pos = 0; syncPlayBtn(); }
@@ -153,12 +171,19 @@ async function driveBuf(f) {
   const buf = await (await dFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`)).arrayBuffer();
   await cache.put(k, new Response(buf.slice(0))); return buf;
 }
+function monoIfDual(buf) {     // dual-mono stereo files -> mono (halves RAM)
+  if (buf.numberOfChannels !== 2) return buf;
+  const a = buf.getChannelData(0), b = buf.getChannelData(1);
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return buf;
+  const m = E.ctx.createBuffer(1, buf.length, buf.sampleRate); m.copyToChannel(a, 0); return m;
+}
 async function decodeAll(items, label) {            // items: [{name, get:()=>Promise<ArrayBuffer>}]
   let n = 0;
   return Promise.all(items.map(async (it) => {
     const ab = await it.get();
-    const buffer = await E.ctx.decodeAudioData(ab.slice(0));
-    status(`${label}: ${++n}/${items.length}`); return { name: it.name, buffer };
+    const buffer = monoIfDual(await E.ctx.decodeAudioData(ab.slice(0)));
+    status(`${label}: ${++n}/${items.length}`);
+    return { name: it.name, channels: buffer.numberOfChannels, segs: [{ t: 0, d: buffer.duration, off: 0, rate: 1, buffer }] };
   }));
 }
 
@@ -227,13 +252,20 @@ async function loadSong(song) {
   stop(); current = song; renderLibrary(); renderSetlist();
   $('#songName').textContent = song.name; $('#songMeta').textContent = 'завантаження…';
   try {
-    const items = song.src === 'demo' ? demoSong() : await song.load();
+    let items = song.src === 'demo' ? demoSong() : await song.load();
     if (current !== song) return;
+    let extra = { markers: [], warnings: [], tempo: 0, dur: 0 };
+    if (!Array.isArray(items)) { extra = items; items = items.stems; }
     E.song = song; E.pos = 0;
-    E.stems = items.map((it) => ({ ...it, vol: 1, mute: false, solo: false }));
-    E.dur = Math.max(...E.stems.map((s) => s.buffer.duration));
+    E.stems = items.map((it) => {
+      const segs = it.segs || [{ t: 0, d: it.buffer.duration, off: 0, rate: 1, buffer: it.buffer }];
+      return { ...it, segs, channels: it.channels || segs[0].buffer.numberOfChannels, vol: it.vol ?? 1, mute: it.mute ?? false, solo: false };
+    });
+    E.dur = extra.dur || Math.max(...E.stems.flatMap((s) => s.segs.map((g) => g.t + g.d)));
+    E.markers = extra.markers || [];
     E.stems.forEach(buildStemNodes);
-    $('#songMeta').textContent = `${E.stems.length} стемів · ${fmt(E.dur)}`;
+    $('#songMeta').textContent = `${E.stems.length} стемів · ${fmt(E.dur)}` + (extra.tempo ? ` · ${extra.tempo} BPM` : '');
+    renderMarkers(); renderReport(extra.warnings || []);
     status('Готово'); renderMixer(); renderMatrix();
   } catch (e) { $('#songMeta').textContent = 'помилка: ' + e.message; status('Помилка: ' + e.message); }
 }
@@ -281,6 +313,7 @@ function renderMixer() {
     f.ondblclick = () => { f.value = st.vol = 1; applyGain(st); };
     $('.m', el).onclick = (e) => { st.mute = !st.mute; e.target.classList.toggle('on', st.mute); applyGain(st); };
     $('.s', el).onclick = (e) => { st.solo = !st.solo; e.target.classList.toggle('on', st.solo); E.stems.forEach(applyGain); };
+    $('.m', el).classList.toggle('on', st.mute); f.value = st.vol;
     st.meter = $('.meter i', el); st.rt = $('.rt', el); box.append(el);
   });
 }
@@ -313,6 +346,72 @@ function renderMatrix() {
 function patchAll(fn) {
   E.stems.forEach((st, i) => setPatch(st.name, fn(st, i)));
   renderMatrix(); renderMixer();
+}
+
+function renderMarkers() {
+  const box = $('#markers'); box.innerHTML = '';
+  E.markers.forEach((m) => {
+    const b = document.createElement('button'); b.textContent = `${m.name || '•'} · ${fmt(m.t)}`;
+    b.onclick = () => seek(m.t); box.append(b);
+  });
+}
+function renderReport(w) {
+  const d = $('#report'); d.hidden = !w.length;
+  $('#report summary').textContent = `⚠ Зауваження імпорту (${w.length})`;
+  const ul = $('#report ul'); ul.innerHTML = '';
+  w.forEach((x) => { const li = document.createElement('li'); li.textContent = x; ul.append(li); });
+}
+
+// ── Ableton projects ──
+let ablIndex = null;
+async function openAbleton() {
+  if (!window.showDirectoryPicker) return status('Потрібен Chrome/Edge');
+  const root = await showDirectoryPicker();
+  status('Шукаю проєкти Ableton…');
+  ablIndex = await indexFolder(root);
+  const projects = ablIndex.projects;
+  library = library.filter((s) => s.src !== 'als').concat(projects.map((p) => ({
+    id: 'als:' + p.parts.join('/'), name: p.name.replace(/\.als$/i, ''), src: 'als', prefetch: async () => {},
+    load: async () => loadProject(p, ablIndex, E.ctx, (d, n) => status(`${p.name}: ${d}/${n} треків`)),
+  })));
+  renderLibrary(); status(`Знайдено проєктів Ableton: ${projects.length}`);
+}
+
+// ── Export stems as WAV (24-bit) into a folder — e.g. a Drive-synced one ──
+async function writeWav(dir, filename, ab) {
+  const ch = ab.numberOfChannels, n = ab.length, dataLen = n * ch * 3;
+  const h = new DataView(new ArrayBuffer(44)); const s = (o, t) => [...t].forEach((c, i) => h.setUint8(o + i, c.charCodeAt(0)));
+  s(0, 'RIFF'); h.setUint32(4, 36 + dataLen, true); s(8, 'WAVEfmt '); h.setUint32(16, 16, true); h.setUint16(20, 1, true);
+  h.setUint16(22, ch, true); h.setUint32(24, ab.sampleRate, true); h.setUint32(28, ab.sampleRate * ch * 3, true);
+  h.setUint16(32, ch * 3, true); h.setUint16(34, 24, true); s(36, 'data'); h.setUint32(40, dataLen, true);
+  const w = await (await dir.getFileHandle(filename, { create: true })).createWritable();
+  await w.write(h);
+  const data = Array.from({ length: ch }, (_, c) => ab.getChannelData(c)), CH = 96000;
+  for (let i = 0; i < n; i += CH) {
+    const m = Math.min(CH, n - i), buf = new Uint8Array(m * ch * 3); let o = 0;
+    for (let k = 0; k < m; k++) for (let c = 0; c < ch; c++) {
+      const v = Math.round(Math.max(-1, Math.min(1, data[c][i + k])) * 8388607);
+      buf[o++] = v & 255; buf[o++] = (v >> 8) & 255; buf[o++] = (v >> 16) & 255;
+    }
+    await w.write(buf);
+  }
+  await w.close();
+}
+async function exportStems() {
+  if (!E.stems.length) return status('Спершу завантажте пісню');
+  if (!window.showDirectoryPicker) return status('Потрібен Chrome/Edge');
+  const root = await showDirectoryPicker({ mode: 'readwrite' });
+  const safe = (x) => x.replace(/[\\/:*?"<>|]/g, '_').trim();
+  const dir = await root.getDirectoryHandle(safe(E.song.name), { create: true });
+  let i = 0;
+  for (const st of E.stems) {
+    status(`Експорт ${++i}/${E.stems.length}: ${st.name}`);
+    const oc = new OfflineAudioContext(st.channels, Math.ceil(E.dur * 48000), 48000);
+    const g = oc.createGain(); g.gain.value = st.vol; g.connect(oc.destination);
+    schedule(oc, st, g, 0, 0);
+    await writeWav(dir, `${String(i).padStart(2, '0')} ${safe(st.name)}.wav`, await oc.startRendering());
+  }
+  status(`Експортовано ${E.stems.length} стемів у «${E.song.name}»`);
 }
 
 function selectTab(t) {
@@ -363,9 +462,11 @@ $('#seek').onchange = (e) => { seeking = false; seek((e.target.value / 1000) * E
 $('#master').oninput = (e) => { E.masterVol = +e.target.value; E.master.gain.value = E.masterVol; };
 $('#search').oninput = renderLibrary;
 $('#btnDrive').onclick = () => connectDrive().catch((e) => status('Drive: ' + e.message));
+$('#btnAbleton').onclick = () => openAbleton().catch((e) => status('Ableton: ' + e.message));
+$('#btnExport').onclick = () => exportStems().catch((e) => status('Експорт: ' + e.message));
 $('#btnLocal').onclick = () => openLocal().catch((e) => status(e.message));
 $('#btnDemo').onclick = () => { if (!library.some((s) => s.src === 'demo')) library.unshift({ id: 'demo', name: 'Demo (тестові стеми)', src: 'demo' }); renderLibrary(); loadSong(library.find((s) => s.src === 'demo')); };
-$('#patchAuto').onclick = () => patchAll((st, i) => (st.buffer.numberOfChannels > 1 ? [(i * 2) % E.nOut, (i * 2 + 1) % E.nOut] : [i % E.nOut]));
+$('#patchAuto').onclick = () => patchAll((st, i) => (st.channels > 1 ? [(i * 2) % E.nOut, (i * 2 + 1) % E.nOut] : [i % E.nOut]));
 $('#patchMain').onclick = () => patchAll(() => [0, 1]);
 $('#patchClear').onclick = () => patchAll(() => []);
 $('#device').onchange = (e) => { S.deviceId = e.target.value; save('deviceId'); changeAudio(); };

@@ -24,6 +24,7 @@
       <div class="row">
         <button id="btnDrive">Google Drive</button>
         <button id="btnLocal">Папка</button>
+        <button id="btnAbleton" title="Папка з проєктами Ableton (.als)">Ableton</button>
         <button id="btnDemo">Demo</button>
       </div>
       <input id="search" placeholder="Пошук пісні…">
@@ -46,6 +47,11 @@
       <label class="master">Master <input id="master" type="range" min="0" max="1.5" step="0.01" value="1"></label>
     </div>
 
+    <div id="extra">
+      <div id="markers"></div>
+      <button id="btnExport" title="Зберегти стеми як WAV у папку (напр. синхронізовану з Drive)">⬇ Експорт стемів</button>
+      <details id="report" hidden><summary></summary><ul></ul></details>
+    </div>
     <section id="tab-mixer" class="tab"><div id="strips"></div></section>
     <section id="tab-patch" class="tab" hidden>
       <div class="row">

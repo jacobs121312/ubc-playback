@@ -61,3 +61,9 @@ table.matrix{border-collapse:collapse}
 p.hint{max-width:640px}
 #tab-settings h3{margin-top:18px}
 [hidden]{display:none!important}
+#extra{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--line)}
+#extra:not(:has(#markers button)):not(:has(#report:not([hidden]))){padding:6px 16px}
+#markers{display:flex;gap:6px;flex-wrap:wrap;flex:1}
+#markers button{padding:3px 10px;font-size:12px}
+#report{flex-basis:100%;color:var(--warn);font-size:12px}
+#report ul{margin:6px 0 0;padding-left:18px;color:var(--dim)}
