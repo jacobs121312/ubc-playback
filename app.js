@@ -1,5 +1,5 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181406';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -654,7 +654,7 @@ async function transformStems(semi, tempo) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181406', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
