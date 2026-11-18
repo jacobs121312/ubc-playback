@@ -1,7 +1,7 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { startHost, loadScript } from './remote-host.js?v=202611181522';
-import { detectSections } from './guide.js?v=202611181522';
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181522';
+import { startHost, loadScript } from './remote-host.js?v=202611181529';
+import { detectSections } from './guide.js?v=202611181529';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181529';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -14,14 +14,15 @@ const S = {
   index: store.get('index', {}),
   markers: store.get('markers', {}), trim: store.get('trim', {}), mix: store.get('mix', {}),
   presets: store.get('presets', {}), pad: store.get('pad', { out: [0, 1], vol: 0.5, key: 'C' }),
+  sundays: store.get('sundays', []), activeSunday: store.get('activeSunday', null), memMode: store.get('memMode', 'economy'),
   clicks: store.get('clicks', {}), songPad: store.get('songPad', {}),
   remote: store.get('remote', { on: false, id: null, pin: null }),
   ver: store.get('ver', {}), pinned: store.get('pinned', {}), fade: store.get('fade', {}),
   arr: store.get('arr', {}), trans: store.get('trans', {}), autoDetect: store.get('autoDetect', true),
-  autoAdvance: store.get('autoAdvance', true), preload: store.get('preload', false), xform: store.get('xform', {}),
+  autoAdvance: store.get('autoAdvance', true), preload: store.get('preload', true), xform: store.get('xform', {}),
 };
-const save = (k) => store.set(k, S[k]);
-const status = (t) => { $('#status').textContent = t; };
+const save = (k) => { store.set(k, S[k]); if (k === 'setlist' && typeof syncSunday === 'function') syncSunday(); };
+const status = (t) => { $('#status').textContent = t; const n = $('#pfNote'); if (n && !$('#preflight').hidden) n.textContent = t; };
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const key = (n) => n.trim().toLowerCase();
 
@@ -265,16 +266,26 @@ function monoIfDual(buf) {     // dual-mono stereo files -> mono (halves RAM)
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return buf;
   const m = E.ctx.createBuffer(1, buf.length, buf.sampleRate); m.copyToChannel(a, 0); return m;
 }
-async function decodeAll(items, label, quiet = false) {            // items: [{name, get:()=>Promise<ArrayBuffer>}]
+async function decodeAll(items, label, quiet = false) {            // quiet: false = status line, true = silent, function = progress callback            // items: [{name, get:()=>Promise<ArrayBuffer>}]
   let n = 0;
   return Promise.all(items.map(async (it) => {
     const ab = await it.get();
     const buffer = monoIfDual(await E.ctx.decodeAudioData(ab.slice(0)));
-    if (!quiet) status(`${label}: ${++n}/${items.length}`);
+    ++n; if (typeof quiet === 'function') quiet(n, items.length); else if (!quiet) status(`${label}: ${n}/${items.length}`);
     return { name: it.name, channels: buffer.numberOfChannels, segs: [{ t: 0, d: buffer.duration, off: 0, rate: 1, buffer }] };
   }));
 }
 
+const GUIDE_RE = /guide|(^|\W)cues?$|гайд/i;
+function driveEntry(f, filesFn) {
+  const items = async (files, q) => decodeAll(files.map((x) => ({ name: stemName(x.name), get: () => driveBuf(x) })), f.name, q);
+  return {
+    id: f.id, name: f.name, src: 'drive',
+    load: async (q) => items(await filesFn(), q),
+    loadGuide: async (q) => items((await filesFn()).filter((x) => GUIDE_RE.test(stemName(x.name))), q),   // only the Guide stem (cheap) for section detection
+    prefetch: async (cb) => { const fl = await filesFn(); let d = 0; for (const x of fl) { await driveBuf(x); cb?.(++d, fl.length); } },
+  };
+}
 async function connectDrive() {
   if (!S.rootFolder) { selectTab('settings'); return status('Вкажіть папку Drive у Налаштуваннях'); }
   status('Підключення до Drive…');
@@ -287,22 +298,14 @@ async function connectDrive() {
     if (!folders.length) return status('Drive: ' + e.message);
     status('Офлайн: використовую кешований список');
   }
-  library = library.filter((s) => s.src !== 'drive').concat(folders.map((f) => ({
-    id: f.id, name: f.name, src: 'drive',
-    load: async (q) => decodeAll((await driveStemFiles(f.id)).map((x) => ({ name: stemName(x.name), get: () => driveBuf(x) })), f.name, q),
-    prefetch: async () => { for (const x of await driveStemFiles(f.id)) await driveBuf(x); },
-  })));
+  library = library.filter((s) => s.src !== 'drive').concat(folders.map((f) => driveEntry(f, () => driveStemFiles(f.id))));
   renderLibrary(); status(`Drive: ${folders.length} пісень`);
   syncDriveVersions(folderId(S.rootFolder));
 }
 function offlineDrive() {       // show cached Drive songs without login
   const folders = store.get('driveSongs', []);
   if (!folders.length) return;
-  library = library.concat(folders.map((f) => ({
-    id: f.id, name: f.name, src: 'drive',
-    load: async (q) => decodeAll((S.index[f.id] || []).map((x) => ({ name: stemName(x.name), get: () => driveBuf(x) })), f.name, q),
-    prefetch: async () => {},
-  })));
+  library = library.concat(folders.map((f) => driveEntry(f, async () => S.index[f.id] || [])));
 }
 
 async function openLocal() {
@@ -337,7 +340,8 @@ function demoSong() {
 
 // ───────────── Song loading / setlist ─────────────
 let current = null;
-const decoded = new Map();            // song.id -> Promise<items>, kept for current + next song only
+const XC = new Map();                 // song.id -> pre-computed key/tempo transform {key, segs[], dur}
+const decoded = new Map();            // song.id -> Promise<items>; economy mode keeps current + next song only, full mode keeps all
 function getItems(song, quiet) {
   if (!decoded.has(song.id)) {
     const p = Promise.resolve(song.load(quiet)); decoded.set(song.id, p);
@@ -348,8 +352,11 @@ function getItems(song, quiet) {
 function preloadNext() {
   const list = S.setlist.map((id) => library.find((s) => s.id === id)).filter(Boolean);
   const nx = list[list.indexOf(current) + 1];
-  const keep = new Set([current?.id, nx?.id]);
-  for (const k of [...decoded.keys()]) if (!keep.has(k)) decoded.delete(k);
+  if (S.memMode !== 'full') {
+    const keep = new Set([current?.id, nx?.id]);
+    for (const k of [...decoded.keys()]) if (!keep.has(k)) decoded.delete(k);
+    for (const k of [...XC.keys()]) if (!keep.has(k)) XC.delete(k);
+  }
   if (S.preload && nx && nx.src !== 'demo' && !decoded.has(nx.id)) getItems(nx, true).catch(() => {});
 }
 async function loadSong(song, xf) {
@@ -373,7 +380,11 @@ async function loadSong(song, xf) {
     });
     E.dur = extra.dur || Math.max(...E.stems.flatMap((s) => s.segs.map((g) => g.t + g.d)));
     E.tempo = 1;
-    if (xf && (xf.semi || xf.tempo !== 1)) await transformStems(xf.semi, xf.tempo);
+    if (xf && (xf.semi || xf.tempo !== 1)) {
+      const xk = JSON.stringify(xf), hit = XC.get(song.id);
+      if (hit && hit.key === xk && hit.segs.length === E.stems.length) { E.stems.forEach((st, i) => { st.segs = hit.segs[i]; }); E.dur = hit.dur; E.tempo = xf.tempo; }
+      else { await transformStems(xf.semi, xf.tempo); XC.set(song.id, { key: xk, segs: E.stems.map((st) => st.segs), dur: E.dur }); }
+    }
     if (current !== song) return;
     E.stems.forEach((st) => { st.baseSegs = st.segs; }); E.baseDur = E.dur;
     E.ablMarkers = (extra.markers || []).filter((m) => m.name && !/^\d+$/.test(m.name)); E.pos = startPos(); showTrim();
@@ -402,6 +413,7 @@ function addToSetlist(song) {
 
 // ───────────── UI ─────────────
 function renderLibrary() {
+  if (typeof renderHome === 'function') queueMicrotask(renderHome);
   const q = $('#search').value.toLowerCase();
   const ul = $('#library'); ul.innerHTML = '';
   library.filter((s) => s.name.toLowerCase().includes(q)).forEach((s) => {
@@ -709,12 +721,14 @@ $('#chkPin').onchange = (e) => {
   } else { delete S.pinned[id]; save('pinned'); }
   renderVersions();
 };
-function exportData() { return { format: 'ubc-playback-versions', v: 1, exportedAt: Date.now(), ver: S.ver, pinned: S.pinned, clicks: S.clicks, songs: Object.fromEntries(library.map((l) => [l.id, l.name])) }; }
+function exportData() { return { format: 'ubc-playback-versions', v: 1, exportedAt: Date.now(), ver: S.ver, pinned: S.pinned, clicks: S.clicks, sundays: S.sundays, songs: Object.fromEntries(library.map((l) => [l.id, l.name])) }; }
 function mergeVersions(d) {
   if (!d || d.format !== 'ubc-playback-versions') throw new Error('Це не файл версій Playback');
   let n = 0;
   for (const [id, c] of Object.entries(d.clicks || {})) if (!S.clicks[id] || (c.updated || 0) > (S.clicks[id].updated || 0)) { S.clicks[id] = c; n++; }
   if (d.clicks) { save('clicks'); syncClickLibrary(); }
+  for (const sn of d.sundays || []) { const mine = S.sundays.find((x) => x.id === sn.id); if (!mine) { S.sundays.push(sn); n++; } else if ((sn.updated || 0) > (mine.updated || 0)) { Object.assign(mine, sn); n++; } }
+  if (d.sundays) { store.set('sundays', S.sundays); if (typeof renderHome === 'function') renderHome(); }
   for (const [id, v] of Object.entries(d.ver || {})) {
     const mine = S.ver[id] ||= { list: {}, main: v.main };
     for (const [name, sn] of Object.entries(v.list || {})) if (!mine.list[name] || (sn.savedAt || 0) > (mine.list[name].savedAt || 0)) { mine.list[name] = sn; n++; }
@@ -767,10 +781,9 @@ function asrInit() {
   return ASR.ready;
 }
 const asrText = (a) => new Promise((res, rej) => { const i = ++ASR.id; ASR.pend.set(i, { res, rej }); ASR.w.postMessage({ type: 'transcribe', id: i, audio: a }, [a.buffer]); });
-function guideSamples() {
-  const st = E.stems.find((x) => /guide|(^|\W)cues?$|гайд/i.test(x.name)); if (!st) return null;
-  const sr = 16000, n = Math.ceil(E.baseDur * sr), x = new Float32Array(n);
-  for (const g of st.baseSegs) {
+function guideSamplesFrom(segs, dur) {
+  const sr = 16000, n = Math.ceil(dur * sr), x = new Float32Array(n);
+  for (const g of segs) {
     const ch = g.buffer.getChannelData(0), bsr = g.buffer.sampleRate;
     const i0 = Math.max(0, Math.floor(g.t * sr)), i1 = Math.min(n, Math.floor((g.t + g.d) * sr));
     for (let i = i0; i < i1; i++) {
@@ -780,6 +793,10 @@ function guideSamples() {
     }
   }
   return x;
+}
+function guideSamples() {
+  const st = E.stems.find((x) => GUIDE_RE.test(x.name)); if (!st) return null;
+  return guideSamplesFrom(st.baseSegs, E.baseDur);
 }
 async function detectGuide(auto = false) {
   if (!E.song || E.detecting || guardLock()) return;
@@ -903,7 +920,7 @@ async function openAbleton() {
   const projects = ablIndex.projects;
   library = library.filter((s) => s.src !== 'als').concat(projects.map((p) => ({
     id: 'als:' + p.parts.join('/'), name: p.name.replace(/\.als$/i, ''), src: 'als', prefetch: async () => {},
-    load: async (q) => { const r = await loadProject(p, ablIndex, E.ctx, (d, n) => { if (!q) status(`${p.name}: ${d}/${n} треків`); }); await applyMarkersCache(r, p); return r; },
+    load: async (q) => { const r = await loadProject(p, ablIndex, E.ctx, (d, n) => { if (typeof q === 'function') q(d, n); else if (!q) status(`${p.name}: ${d}/${n} треків`); }); await applyMarkersCache(r, p); return r; },
   })));
   renderLibrary(); status(`Знайдено проєктів Ableton: ${projects.length}`);
 }
@@ -1052,30 +1069,29 @@ function runWorker(w, buf, semi, tempo) {
     w.postMessage({ channels: chans, sampleRate: buf.sampleRate, semitones: semi, tempo }, chans.map((c) => c.buffer));
   });
 }
-async function transformStems(semi, tempo) {
+async function transformStems(semi, tempo, stems = E.stems, progress = null) {
   const jobs = new Map();                                    // buffer -> Map(noPitch -> processed buffer)
-  E.stems.forEach((st) => st.segs.forEach((g) => {
+  stems.forEach((st) => st.segs.forEach((g) => {
     const f = NO_PITCH.test(st.name); if (!jobs.has(g.buffer)) jobs.set(g.buffer, new Map()); jobs.get(g.buffer).set(f, null);
   }));
   const queue = [...jobs].flatMap(([buf, m]) => [...m.keys()].map((f) => ({ buf, f })));
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181522', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181529', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
         jobs.get(buf).set(f, await runWorker(w, buf, f ? 0 : semi, tempo));
-        status(`Зміна тональності/темпу: ${++done}/${total}`);
+        ++done; if (progress) progress(done, total); else status(`Зміна тональності/темпу: ${done}/${total}`);
       }
     } finally { w.terminate(); }
   }));
-  E.stems.forEach((st) => {
+  stems.forEach((st) => {
     const f = NO_PITCH.test(st.name);
     st.segs = st.segs.map((g) => ({ ...g, t: g.t / tempo, d: g.d / tempo, off: g.off / tempo, buffer: jobs.get(g.buffer).get(f) }));
   });
-  E.dur /= tempo; E.tempo = tempo;
-  status(`Готово за ${((performance.now() - t0) / 1000).toFixed(1)} с`);
+  if (stems === E.stems) { E.dur /= tempo; E.tempo = tempo; status(`Готово за ${((performance.now() - t0) / 1000).toFixed(1)} с`); }
 }
 function syncXform() {
   const x = S.xform[current?.id] || { semi: 0, tempo: 1 };
@@ -1329,6 +1345,200 @@ const saveSongPad = () => {
 $('#songPadKey').onchange = saveSongPad; $('#songPadAuto').onchange = saveSongPad;
 $('#songPadNow').onclick = () => { const k = $('#songPadKey').value; if (k) padStart(k); };
 syncClickLibrary();
+
+// ───────────── Home page: Sundays, setlist builder, preflight (loading menu) ─────────────
+const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const nextSundayISO = () => { const d = new Date(); d.setDate(d.getDate() + ((7 - d.getDay()) % 7)); return isoLocal(d); };
+const fmtDate = (iso) => (iso ? iso.split('-').reverse().join('.') : '');
+const activeSunday = () => S.sundays.find((x) => x.id === S.activeSunday) || null;
+function syncSunday() { const sun = activeSunday(); if (sun) { sun.list = [...S.setlist]; sun.updated = Date.now(); store.set('sundays', S.sundays); } }
+function ensureSunday() {
+  if (!S.sundays.length) { const date = nextSundayISO(); S.sundays.push({ id: 'sun-' + Date.now(), name: 'Неділя ' + fmtDate(date), date, list: [...S.setlist], updated: Date.now() }); S.activeSunday = S.sundays[0].id; }
+  if (!activeSunday()) S.activeSunday = S.sundays[0].id;
+  S.setlist = [...activeSunday().list]; store.set('sundays', S.sundays); store.set('activeSunday', S.activeSunday); store.set('setlist', S.setlist);
+}
+function setActiveSunday(id) {
+  const sun = S.sundays.find((x) => x.id === id); if (!sun) return;
+  S.activeSunday = id; store.set('activeSunday', id); S.setlist = [...sun.list]; store.set('setlist', S.setlist); renderSetlist(); renderHome();
+}
+function showScreen(name) { $('#home').hidden = name !== 'home'; $('#preflight').hidden = name !== 'preflight'; if (name === 'home') renderHome(); }
+
+function renderLibInfo() {
+  const c = (src) => library.filter((x) => x.src === src).length, p = [];
+  if (c('drive')) p.push(`Google Drive: ${c('drive')} пісень`); if (c('local')) p.push(`Папка: ${c('local')}`); if (c('als')) p.push(`Ableton: ${c('als')}`); if (c('click')) p.push(`без плейбеку: ${c('click')}`);
+  $('#hLibInfo').textContent = p.length ? p.join(' · ') : 'Бібліотека порожня — підключіть Google Drive або оберіть папку з плейбеками.';
+  $('#hDrive').classList.toggle('on', !!c('drive'));
+}
+function renderSundays() {
+  const box = $('#sundayList'); box.innerHTML = '';
+  S.sundays.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')).forEach((sun) => {
+    const el = document.createElement('div'); el.className = 'sun' + (sun.id === S.activeSunday ? ' cur' : '');
+    el.innerHTML = '<b></b><small></small><div class="acts"><button class="go" title="Підготувати й запустити">▶</button><button class="ren" title="Перейменувати">✎</button><button class="dup" title="Дублювати">⧉</button><button class="del" title="Видалити">✕</button></div>';
+    $('b', el).textContent = sun.name; $('small', el).textContent = `${fmtDate(sun.date)} · ${sun.list.length} пісень`;
+    el.onclick = () => setActiveSunday(sun.id);
+    $('.go', el).onclick = (e) => { e.stopPropagation(); setActiveSunday(sun.id); startPreflight(); };
+    $('.ren', el).onclick = (e) => { e.stopPropagation(); const n = prompt('Назва неділі:', sun.name); if (n) { sun.name = n.trim(); sun.updated = Date.now(); store.set('sundays', S.sundays); renderHome(); } };
+    $('.dup', el).onclick = (e) => { e.stopPropagation(); const c = { ...sun, id: 'sun-' + Date.now(), name: sun.name + ' (копія)', list: [...sun.list], updated: Date.now() }; S.sundays.push(c); store.set('sundays', S.sundays); setActiveSunday(c.id); };
+    $('.del', el).onclick = (e) => { e.stopPropagation(); if (S.sundays.length <= 1) return status('Має лишитись хоча б одна неділя'); if (!confirm(`Видалити «${sun.name}»?`)) return; S.sundays = S.sundays.filter((x) => x.id !== sun.id); store.set('sundays', S.sundays); if (S.activeSunday === sun.id) setActiveSunday(S.sundays[0].id); else renderHome(); };
+    box.append(el);
+  });
+}
+function renderBuilder() {
+  const sun = activeSunday(); $('#bTitle').textContent = sun ? `«${sun.name}» · ${fmtDate(sun.date)}` : '';
+  const q = $('#bSearch').value.toLowerCase(), inSet = new Set(S.setlist);
+  const lib = $('#bLib'); lib.innerHTML = '';
+  library.filter((x) => x.src !== 'demo' && x.name.toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name, 'uk')).slice(0, 400).forEach((x) => {
+    const li = document.createElement('li'); li.innerHTML = '<span></span><small></small><button>＋</button>';
+    $('span', li).textContent = x.name; $('small', li).textContent = { drive: 'Drive', als: 'Ableton', local: 'папка', click: '♩ без плейбеку' }[x.src] || '';
+    if (inSet.has(x.id)) li.classList.add('cur');
+    li.onclick = () => { if (!S.setlist.includes(x.id)) { S.setlist.push(x.id); save('setlist'); renderSetlist(); renderHome(); } };
+    lib.append(li);
+  });
+  if (!lib.children.length) lib.innerHTML = '<li class="hint" style="cursor:default">Нічого не знайдено. Підключіть бібліотеку вище.</li>';
+  const set = $('#bSet'); set.innerHTML = '';
+  S.setlist.forEach((id, i) => {
+    const x = library.find((y) => y.id === id), li = document.createElement('li');
+    li.innerHTML = `<small>${i + 1}</small><span></span><small class="bd"></small><button class="up">▲</button><button class="dn">▼</button><button class="rm">✕</button>`;
+    $('span', li).textContent = x ? x.name : '⚠ немає в бібліотеці';
+    $('.bd', li).textContent = [!x ? 'підключіть джерело' : '', S.pinned[id] ? '🔒' : '', S.ver[id] ? '★' : '', S.xform[id] ? 'тон/темп' : '', x?.src === 'click' ? '♩' : ''].filter(Boolean).join(' ');
+    const mv = (d) => (e) => { e.stopPropagation(); const j = i + d; if (j < 0 || j >= S.setlist.length) return; [S.setlist[i], S.setlist[j]] = [S.setlist[j], S.setlist[i]]; save('setlist'); renderSetlist(); renderHome(); };
+    $('.up', li).onclick = mv(-1); $('.dn', li).onclick = mv(1);
+    $('.rm', li).onclick = (e) => { e.stopPropagation(); S.setlist.splice(i, 1); save('setlist'); renderSetlist(); renderHome(); };
+    set.append(li);
+  });
+  if (!S.setlist.length) set.innerHTML = '<li class="hint" style="cursor:default">Сетліст порожній — натискайте пісні ліворуч.</li>';
+  $('#hLaunch').disabled = !S.setlist.length;
+  $('#hLaunchInfo').textContent = S.setlist.length ? `${S.setlist.length} пісень: завантажаться файли, гайди й секції, щоб переходи були швидкими` : 'Додайте хоча б одну пісню';
+}
+function renderHome() { if ($('#home').hidden) return; $('#hContinue').hidden = !E.stems.length; renderLibInfo(); renderSundays(); renderBuilder(); }
+$('#hDrive').onclick = () => connectDrive().then(renderHome).catch((e) => status('Drive: ' + e.message));
+$('#hLocal').onclick = () => openLocal().then(renderHome).catch((e) => status(e.message));
+$('#hAbleton').onclick = () => openAbleton().then(renderHome).catch((e) => status('Ableton: ' + e.message));
+$('#hNew').onclick = () => openNewSong(null);
+$('#hDemo').onclick = () => { if (!library.some((x) => x.src === 'demo')) library.unshift({ id: 'demo', name: 'Demo (тестові стеми)', src: 'demo' }); if (!S.setlist.includes('demo')) { S.setlist.push('demo'); save('setlist'); renderSetlist(); } renderHome(); };
+$('#hSettings').onclick = () => selectTab('settings');
+$('#bSearch').oninput = renderBuilder;
+$('#hNewSunday').onclick = () => { $('#newSunday').hidden = false; const d = nextSundayISO(); $('#nsuDate').value = d; $('#nsuName').value = 'Неділя ' + fmtDate(d); $('#nsuName').focus(); };
+$('#nsuCancel').onclick = () => { $('#newSunday').hidden = true; };
+$('#nsuDate').onchange = () => { if (/^Неділя \d/.test($('#nsuName').value)) $('#nsuName').value = 'Неділя ' + fmtDate($('#nsuDate').value); };
+$('#nsuCreate').onclick = () => {
+  const name = $('#nsuName').value.trim() || 'Неділя', date = $('#nsuDate').value || nextSundayISO();
+  const sun = { id: 'sun-' + Date.now(), name, date, list: $('#nsuCopy').checked ? [...S.setlist] : [], updated: Date.now() };
+  S.sundays.push(sun); store.set('sundays', S.sundays); $('#newSunday').hidden = true; setActiveSunday(sun.id);
+};
+$('#btnHome').onclick = () => { if (E.playing && !confirm('Зараз грає плейбек. Піти на домашню сторінку? (відтворення продовжиться)')) return; showScreen('home'); };
+$('#hContinue').onclick = () => { if (E.stems.length) showScreen(null); else startPreflight(); };
+
+// ── Preflight: downloads files, decodes, listens to the Guide for sections, pre-computes key/tempo ──
+const PF = { cancel: false, running: false, rows: [], t0: 0 };
+const STAGES = [['files', 'Файли'], ['decode', 'Розпаковка'], ['sections', 'Guide → секції'], ['tone', 'Тон/темп']];
+const stemsOf = (items) => (Array.isArray(items) ? items : items.stems);
+const bytesOf = (items) => { const seen = new Set(); let b = 0; for (const st of stemsOf(items)) for (const g of st.segs || []) if (!seen.has(g.buffer)) { seen.add(g.buffer); b += g.buffer.length * g.buffer.numberOfChannels * 4; } return b; };
+function pfBuild(songs) {
+  const box = $('#pfRows'); box.innerHTML = ''; PF.rows = [];
+  songs.forEach((sg, i) => {
+    const el = document.createElement('div'); el.className = 'pfrow';
+    el.innerHTML = `<div class="pfn"><span class="ix">${i + 1}</span><b></b><small class="mb"></small></div><div class="stages">${STAGES.map(([k, t]) => `<div class="stg" data-k="${k}"><span>${t}</span><div class="bar"><i></i></div></div>`).join('')}</div><div class="pfmsg"></div>`;
+    $('b', el).textContent = sg ? sg.name : S.setlist[i]; if (!sg) el.classList.add('bad');
+    box.append(el); PF.rows.push({ el, st: {}, skip: new Set(), done: false, err: false });
+  });
+}
+function setStage(i, k, d, t) {
+  const r = PF.rows[i]; if (!r) return; r.st[k] = t ? Math.min(1, d / t) : 1; r.skip.delete(k);
+  const stg = $(`.stg[data-k="${k}"]`, r.el); stg.classList.remove('skip'); $('i', stg).style.width = r.st[k] * 100 + '%'; stg.classList.toggle('done', r.st[k] >= 1); pfOverall();
+}
+function skipStage(i, k) { const r = PF.rows[i]; if (!r) return; r.skip.add(k); delete r.st[k]; $(`.stg[data-k="${k}"]`, r.el).classList.add('skip'); }
+function pfMsg(i, text, cls) { const r = PF.rows[i]; $('.pfmsg', r.el).textContent = text; r.el.classList.toggle('bad', cls === 'bad'); r.el.classList.toggle('ok', cls === 'ok'); }
+function pfOverall() {
+  if (!PF.rows.length) return; let sum = 0;
+  PF.rows.forEach((r) => { if (r.done) { sum += 1; return; } const ks = STAGES.map((x) => x[0]).filter((k) => !r.skip.has(k)); sum += ks.length ? ks.reduce((a, k) => a + (r.st[k] || 0), 0) / ks.length : 0; });
+  $('#pfBar').style.width = (sum / PF.rows.length) * 100 + '%'; $('#pfPct').textContent = Math.round((sum / PF.rows.length) * 100) + '%';
+}
+const sectionsKnown = (sg, items) => !!(S.markers[sg.id]?.length || S.arr[sg.id] || pinnedVersion(sg.id) || (items && !Array.isArray(items) && (items.markers || []).filter((m) => m.name && !/^\d+$/.test(m.name)).length >= 3));
+async function pfDetect(i, sg, guideSegs, dur) {
+  setStage(i, 'sections', 0, 1); pfMsg(i, 'Слухаю Guide…');
+  await asrInit(); const x = guideSamplesFrom(guideSegs, dur);
+  const res = await detectSections(x, 16000, asrText, (d, t) => setStage(i, 'sections', d, t));
+  if (res.length) { const mine = (S.markers[sg.id] || []).filter((m) => !m.auto); S.markers[sg.id] = [...mine, ...res.map((r) => ({ t: Math.round(r.t * 100) / 100, name: r.name, auto: true }))]; save('markers'); }
+  setStage(i, 'sections', 1, 1); return res.length;
+}
+async function pfPrepare(i, sg, mode) {
+  if (sg.src === 'demo') { STAGES.forEach(([k]) => skipStage(i, k)); PF.rows[i].done = true; pfMsg(i, 'тестова пісня', 'ok'); return 0; }
+  const keepFull = mode === 'full' || i < 2, notes = [];
+  const xf = pinnedVersion(sg.id)?.xform ?? S.xform[sg.id], hasX = !!(xf && (xf.semi || xf.tempo !== 1)) && sg.src !== 'click';
+  let items = null, mb = 0;
+  if (keepFull) {
+    setStage(i, 'decode', 0, 1); pfMsg(i, 'Розпаковую звук…');
+    items = await getItems(sg, (d, t) => setStage(i, 'decode', d, t)); setStage(i, 'decode', 1, 1); mb = bytesOf(items) / 1048576;
+  } else skipStage(i, 'decode');
+  // sections
+  const auto = S.autoDetect && !['demo', 'click'].includes(sg.src);
+  if (auto && !sectionsKnown(sg, items)) {
+    let guideSegs = null, dur = 0;
+    if (items) { const g = stemsOf(items).find((x) => GUIDE_RE.test(x.name)); if (g) { guideSegs = g.segs; dur = Math.max(...stemsOf(items).flatMap((x) => x.segs.map((q) => q.t + q.d))); } }
+    else if (sg.loadGuide) { const gi = await sg.loadGuide(() => {}); if (gi.length) { guideSegs = gi[0].segs; dur = guideSegs.reduce((m, q) => Math.max(m, q.t + q.d), 0); } }
+    if (guideSegs) { const n = await pfDetect(i, sg, guideSegs, dur); notes.push(n ? `секцій: ${n}` : 'у Guide не знайдено підказок'); }
+    else { skipStage(i, 'sections'); notes.push('немає стему Guide'); }
+  } else { skipStage(i, 'sections'); const m = (S.markers[sg.id]?.length || 0) + (items && !Array.isArray(items) ? (items.markers || []).length : 0); if (m) notes.push(`секцій: ${m}`); }
+  // key / tempo
+  if (hasX && keepFull) {
+    const key = JSON.stringify(xf);
+    if (XC.get(sg.id)?.key !== key) {
+      setStage(i, 'tone', 0, 1); pfMsg(i, 'Змінюю тональність/темп…');
+      const tmp = stemsOf(items).map((it) => ({ name: it.name, segs: it.segs || [{ t: 0, d: it.buffer.duration, off: 0, rate: 1, buffer: it.buffer }] }));
+      const dur0 = (!Array.isArray(items) && items.dur) || Math.max(...tmp.flatMap((st) => st.segs.map((q) => q.t + q.d)));
+      await transformStems(xf.semi, xf.tempo, tmp, (d, t) => setStage(i, 'tone', d, t));
+      XC.set(sg.id, { key, segs: tmp.map((x) => x.segs), dur: dur0 / xf.tempo });
+    }
+    setStage(i, 'tone', 1, 1);
+  } else skipStage(i, 'tone');
+  const r = PF.rows[i]; r.done = true;
+  pfMsg(i, [keepFull ? `у пам'яті ~${Math.round(mb)} МБ` : 'файли в кеші (розпакується перед піснею)', ...notes].join(' · '), 'ok'); pfOverall();
+  return mb;
+}
+async function startPreflight() {
+  if (PF.running) return; if (!S.setlist.length) return;
+  showScreen('preflight'); PF.cancel = false; PF.running = true; PF.t0 = performance.now();
+  const songs = S.setlist.map((id) => library.find((x) => x.id === id) || null);
+  const sun = activeSunday(); $('#pfTitle').textContent = `Підготовка: ${sun ? sun.name : 'сетліст'}`; $('#pfMem').value = S.memMode;
+  $('#pfEnter').disabled = true; $('#pfRetry').hidden = true; $('#pfNote').textContent = ''; $('#pfSummary').textContent = '';
+  pfBuild(songs); pfOverall();
+  const mode = S.memMode;
+  const filesReady = songs.map(() => { let r; const p = new Promise((res) => (r = res)); p.fin = r; return p; });
+  (async () => {            // downloader runs ahead of the decoder
+    for (let i = 0; i < songs.length; i++) {
+      const sg = songs[i];
+      if (PF.cancel) { filesReady[i].fin({ ok: false, err: 'скасовано' }); continue; }
+      if (!sg) { filesReady[i].fin({ ok: false, err: 'пісні немає в бібліотеці — підключіть Drive / відкрийте папку Ableton на головній' }); continue; }
+      try { if (sg.prefetch && sg.src === 'drive') { setStage(i, 'files', 0, 1); pfMsg(i, 'Завантажую файли…'); await sg.prefetch((d, t) => setStage(i, 'files', d, t)); setStage(i, 'files', 1, 1); } else skipStage(i, 'files'); filesReady[i].fin({ ok: true }); }
+      catch (e) { filesReady[i].fin({ ok: false, err: 'файли: ' + e.message + (/token|auth|popup|Drive 40/.test(e.message) ? ' — натисніть «Google Drive» на головній' : '') }); }
+    }
+  })();
+  let errs = 0, totalMB = 0;
+  for (let i = 0; i < songs.length; i++) {
+    const fr = await filesReady[i]; if (PF.cancel) break;
+    if (!fr.ok) { pfMsg(i, fr.err, 'bad'); PF.rows[i].err = true; errs++; continue; }
+    try { totalMB += await pfPrepare(i, songs[i], mode); } catch (e) { pfMsg(i, 'Помилка: ' + e.message, 'bad'); PF.rows[i].err = true; errs++; }
+  }
+  PF.running = false; if (PF.cancel) return;
+  const secs = ((performance.now() - PF.t0) / 1000).toFixed(0);
+  $('#pfBar').style.width = '100%'; $('#pfPct').textContent = '100%';
+  $('#pfSummary').textContent = `${songs.length - errs} з ${songs.length} пісень готові за ${secs} с · у пам'яті ≈ ${Math.round(totalMB)} МБ${mode === 'economy' ? ' (економний режим: поточна й наступна пісня)' : ''}${errs ? ` · проблем: ${errs}` : ''}`;
+  $('#pfEnter').disabled = false; $('#pfRetry').hidden = !errs;
+  if (!errs && $('#pfAuto').checked) setTimeout(() => { if (!$('#preflight').hidden && !PF.running) enterPerform(); }, 900);
+}
+async function enterPerform() {
+  const list = S.setlist.map((id) => library.find((x) => x.id === id)).filter(Boolean);
+  showScreen(null); renderSetlist();
+  if (list.length && current !== list[0]) await loadSong(list[0]); else preloadNext();
+}
+$('#pfEnter').onclick = enterPerform;
+$('#pfCancel').onclick = () => { PF.cancel = true; PF.running = false; showScreen('home'); };
+$('#pfRetry').onclick = () => { PF.running = false; startPreflight(); };
+$('#pfMem').onchange = (e) => { S.memMode = e.target.value; save('memMode'); };
+$('#hLaunch').onclick = startPreflight;
+
+ensureSunday(); renderSetlist(); showScreen('home');
 
 // Small hook for debugging / automated tests
 window.PB = { seek, S, fadeGain: () => E.stems[0]?.fade.gain.value, pos: position, playing: () => E.playing, setFade, play, mark: markCurrentSection, addSong(song) { library.push(song); renderLibrary(); }, load: loadSong, state: () => ({ markers: E.markers, dur: E.dur, tempo: E.tempo, arr: S.arr[E.song?.id] || null, stems: E.stems.map((x) => ({ name: x.name, segs: x.segs.length })) }), ops: { opDelete, opDup, opMove, opSplit, opMergeNext, opRename, resetStructure, undoArr, detectGuide } };

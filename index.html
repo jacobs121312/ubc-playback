@@ -4,10 +4,69 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181522">
+<link rel="stylesheet" href="style.css?v=202611181529">
 </head>
 <body>
+<div id="home" class="screen">
+  <div class="wrap">
+    <div class="hero"><div class="logo">▶ Playback</div><div class="hint">Створіть неділю, зберіть сетліст — і запускайте. Усе потрібне завантажиться наперед.</div>
+      <div class="row"><button id="hContinue" class="primary" hidden>↩ Повернутись до запуску</button><button id="hSettings" class="ghost">⚙ Налаштування (аудіовихід Dante, Drive, MIDI)</button></div></div>
+
+    <section class="card2">
+      <h2><span class="n">1</span> Бібліотека</h2>
+      <div class="row">
+        <button id="hDrive">Google Drive</button><button id="hLocal">Папка зі стемами</button><button id="hAbleton">Проєкти Ableton</button>
+        <button id="hNew" title="Метроном + пад, зберігається під назвою пісні">＋ Пісня без плейбеку</button><button id="hDemo" class="ghost">Demo</button>
+      </div>
+      <div id="hLibInfo" class="hint"></div>
+    </section>
+
+    <section class="card2">
+      <h2><span class="n">2</span> Неділя</h2>
+      <div id="sundayList" class="sundays"></div>
+      <div class="row"><button id="hNewSunday">＋ Нова неділя</button></div>
+      <div id="newSunday" class="newsun" hidden>
+        <label>Назва <input id="nsuName"></label><label>Дата <input id="nsuDate" type="date"></label>
+        <label class="chk"><input type="checkbox" id="nsuCopy"> Почати з сетлісту поточної неділі</label>
+        <div class="row"><button id="nsuCreate" class="primary">Створити</button><button id="nsuCancel">Скасувати</button></div>
+      </div>
+    </section>
+
+    <section class="card2">
+      <h2><span class="n">3</span> Сетліст <small id="bTitle"></small></h2>
+      <div class="builder">
+        <div><input id="bSearch" placeholder="Пошук у бібліотеці…"><ul id="bLib" class="list"></ul></div>
+        <div><div class="hint" style="margin-bottom:8px">Порядок у службі (▲▼ — міняти порядок)</div><ul id="bSet" class="list"></ul></div>
+      </div>
+    </section>
+
+    <div class="cta"><button id="hLaunch" class="primary big">▶ Підготувати й запустити</button><span id="hLaunchInfo" class="hint"></span></div>
+  </div>
+</div>
+
+<div id="preflight" class="screen" hidden>
+  <div class="wrap">
+    <h1 id="pfTitle">Підготовка…</h1>
+    <div class="pfbar"><i id="pfBar"></i><span id="pfPct">0%</span></div>
+    <div id="pfSummary" class="hint" style="margin:8px 0"></div>
+    <div id="pfNote" class="hint" style="min-height:18px"></div>
+    <div id="pfRows"></div>
+    <div class="row" style="margin-top:14px">
+      <label>Пам'ять
+        <select id="pfMem" class="inline"><option value="economy">Економно: у RAM поточна + наступна пісня</option><option value="full">Повністю: усі пісні в RAM (потрібно багато пам'яті)</option></select></label>
+      <label class="chk"><input type="checkbox" id="pfAuto" checked> Входити автоматично, коли все готово</label>
+    </div>
+    <div class="row">
+      <button id="pfEnter" class="primary big" disabled>▶ Увійти в режим запуску</button>
+      <button id="pfRetry" hidden>↻ Повторити</button>
+      <button id="pfCancel">← Назад</button>
+    </div>
+    <p class="hint">Що робиться: файли з Drive скачуються в кеш, звук розпаковується, гайди розпізнаються й розставляються секції, а для пісень зі зміненою тональністю/темпом заздалегідь готуються нові версії. У режимі запуску наступна пісня підвантажується у фоні, поки грає поточна.</p>
+  </div>
+</div>
+
 <header id="top">
+  <button id="btnHome" class="tbtn small" title="Домашня сторінка: неділі та сетліст">⌂</button>
   <div class="bpmbox"><b id="bpm">—</b><span id="sig">4/4</span></div>
   <div class="clockbox"><div id="clock">00:00</div><small id="clockSub">0:00 / 0:00</small></div>
   <button id="btnPad" class="tbtn small" title="Пади">PAD</button>
@@ -254,6 +313,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181522"></script>
+<script type="module" src="app.js?v=202611181529"></script>
 </body>
 </html>
