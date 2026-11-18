@@ -1,7 +1,7 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { startHost, loadScript } from './remote-host.js?v=202611181703';
-import { detectSections } from './guide.js?v=202611181703';
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181703';
+import { startHost, loadScript } from './remote-host.js?v=202611181723';
+import { detectSections } from './guide.js?v=202611181723';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181723';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -945,6 +945,7 @@ async function detectGuide(auto = false) {
   if (!x) { if (!auto) status('Не знайшов стем Guide/Cue у цій пісні'); return; }
   const song = E.song; E.detecting = true; $('#btnDetect').disabled = true;
   try {
+    if (auto) { const n = await tryPlayerMarkers(song, E.stems, E.baseDur * E.tempo); if (n && E.song === song) { delete S.arr[song.id]; save('arr'); arrHist.length = 0; rebuildMarkers(); status(`Секції взято з плеєр-пакета: ${n}`); return; } }
     status('Завантажую модель розпізнавання мови (перший раз ~40 МБ, далі з кешу)…'); await asrInit();
     status('Слухаю Guide…');
     const res = await detectSections(x, 16000, asrText, (d, t) => status(`Guide: розпізнано ${d}/${t}`));
@@ -991,12 +992,11 @@ function renderMarkers() {
   });
 }
 // ── Waveform ──
-function computePeaks() {
-  const bins = 1400, pk = new Float32Array(bins), dur = E.dur;
-  if (!dur) { E.peaks = null; return; }
-  for (const st of E.stems) {
+function peaksOf(stems, dur, bins, useBase = false) {
+  const pk = new Float32Array(bins); if (!dur) return pk;
+  for (const st of stems) {
     if (/click|metronome|метроном|guide|cue|гайд/i.test(st.name)) continue;
-    for (const g of st.segs) {
+    for (const g of (useBase ? st.baseSegs || st.segs : st.segs)) {
       const ch = g.buffer.getChannelData(0), sr = g.buffer.sampleRate;
       const b0 = Math.max(0, Math.floor((g.t / dur) * bins)), b1 = Math.min(bins, Math.ceil(((g.t + g.d) / dur) * bins));
       for (let b = b0; b < b1; b++) {
@@ -1008,7 +1008,11 @@ function computePeaks() {
       }
     }
   }
-  const mx = Math.max(...pk) || 1;
+  return pk;
+}
+function computePeaks() {
+  const dur = E.dur; if (!dur) { E.peaks = null; return; }
+  const pk = peaksOf(E.stems, dur, 1400), mx = Math.max(...pk) || 1;
   E.peaks = pk.map((v) => Math.pow(v / mx, 0.65));
 }
 function drawWave() {
@@ -1220,7 +1224,7 @@ async function transformStems(semi, tempo, stems = E.stems, progress = null) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181703', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181723', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -1627,7 +1631,10 @@ async function pfPrepare(i, sg, mode) {
     let guideSegs = null, dur = 0;
     if (items) { const g = stemsOf(items).find((x) => GUIDE_RE.test(x.name)); if (g) { guideSegs = g.segs; dur = Math.max(...stemsOf(items).flatMap((x) => x.segs.map((q) => q.t + q.d))); } }
     else if (sg.loadGuide) { const gi = await sg.loadGuide(() => {}); if (gi.length) { guideSegs = gi[0].segs; dur = guideSegs.reduce((m, q) => Math.max(m, q.t + q.d), 0); } }
-    if (guideSegs) { const n = await pfDetect(i, sg, guideSegs, dur); notes.push(n ? `секцій: ${n}` : 'у Guide не знайдено підказок'); }
+    let fromPlayer = 0;
+    if (guideSegs || items) { setStage(i, 'sections', 0, 1); pfMsg(i, 'Шукаю секції в плеєр-пакетах…'); try { fromPlayer = await tryPlayerMarkers(sg, items ? stemsOf(items) : null, dur); } catch {} }
+    if (fromPlayer) { setStage(i, 'sections', 1, 1); notes.push(`секцій з плеєра: ${fromPlayer}`); }
+    else if (guideSegs) { const n = await pfDetect(i, sg, guideSegs, dur); notes.push(n ? `секцій: ${n}` : 'у Guide не знайдено підказок'); }
     else { skipStage(i, 'sections'); notes.push('немає стему Guide'); }
   } else { skipStage(i, 'sections'); const m = (S.markers[sg.id]?.length || 0) + (items && !Array.isArray(items) ? (items.markers || []).length : 0); if (m) notes.push(`секцій: ${m}`); }
   // key / tempo
@@ -1711,6 +1718,114 @@ $('#pfMem').onchange = (e) => { S.memMode = e.target.value; save('memMode'); };
 $('#hLaunch').onclick = startPreflight;
 
 ensureSunday(); renderSetlist(); showScreen('home');
+
+// ── Section markers from the team's player renders (ubc-worship-planer → «UBC мультитреки/_плеєр») ──
+const PL = (() => { const c = store.get('playerIndex', null); return { items: c?.items || null, at: c?.at || 0, peaks: new Map(), building: null }; })();
+async function buildPlayerIndex() {
+  if (PL.building) return PL.building;
+  PL.building = (async () => {
+    try {
+      status('Шукаю плеєр-пакети на Drive…');
+      const root = folderId(S.rootFolder), meta = await (await dFetch(`https://www.googleapis.com/drive/v3/files/${root}?fields=parents&supportsAllDrives=true`)).json();
+      let plId = null; const parent = meta.parents?.[0];
+      if (parent) plId = (await dList(`'${parent}' in parents and name='_плеєр' and mimeType='application/vnd.google-apps.folder' and trashed=false`, 'id'))[0]?.id;
+      if (!plId) plId = (await dList(`name='_плеєр' and mimeType='application/vnd.google-apps.folder' and trashed=false`, 'id'))[0]?.id;
+      if (!plId) throw new Error('папку «_плеєр» не знайдено на Drive');
+      const folders = await dList(`'${plId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`, 'id,name');
+      const byId = new Map(folders.map((f) => [f.id, f]));
+      const files = await dList(`(name='manifest.json' or name='peaks.json') and trashed=false`, 'id,name,parents');
+      const mf = new Map(), pk = new Map();
+      for (const f of files) { const p = f.parents?.[0]; if (byId.has(p)) (f.name === 'manifest.json' ? mf : pk).set(p, f.id); }
+      const items = [], jobs = [...mf.entries()]; let done = 0;
+      await Promise.all(Array.from({ length: 8 }, async () => {
+        while (jobs.length) {
+          const [p, id] = jobs.shift();
+          try {
+            const m = await (await dFetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`)).json();
+            items.push({ id: p, name: byId.get(p).name.replace(/ Project$/i, ''), dur: m.duration, tempo: m.tempo, markers: (m.markers || []).map((x) => ({ t: x.t, name: x.name })), peaks: pk.get(p) || null });
+          } catch {}
+          status(`Плеєр-пакети: ${++done}/${mf.size}`);
+        }
+      }));
+      PL.items = items; PL.at = Date.now(); store.set('playerIndex', { at: PL.at, items }); status(`Знайдено плеєр-пакетів: ${items.length}`);
+      return items;
+    } finally { PL.building = null; }
+  })();
+  return PL.building;
+}
+async function ensurePlayerIndex(allowBuild = true) {
+  if (PL.items && Date.now() - PL.at < 7 * 864e5) return PL.items;
+  if (allowBuild && hasToken() && S.rootFolder) { try { return await buildPlayerIndex(); } catch (e) { status('Плеєр-пакети: ' + e.message); } }
+  return PL.items;
+}
+async function playerPeaks(it) {
+  if (PL.peaks.has(it.id)) return PL.peaks.get(it.id); if (!it.peaks) return null;
+  try { const arr = await (await dFetch(`https://www.googleapis.com/drive/v3/files/${it.peaks}?alt=media&supportsAllDrives=true`)).json(); const f = Float32Array.from(arr); PL.peaks.set(it.id, f); return f; } catch { return null; }
+}
+const poolMax = (arr, n) => { const o = new Float32Array(n); for (let i = 0; i < n; i++) { const a = Math.floor((i * arr.length) / n), b = Math.max(a + 1, Math.floor(((i + 1) * arr.length) / n)); let m = 0; for (let k = a; k < b; k++) if (arr[k] > m) m = arr[k]; o[i] = m; } return o; };
+function zscore(a) { let sum = 0; for (const v of a) sum += v; const m = sum / a.length, o = new Float32Array(a.length); let q = 0; for (let i = 0; i < a.length; i++) { o[i] = a[i] - m; q += o[i] * o[i]; } const sd = Math.sqrt(q / a.length) || 1; for (let i = 0; i < a.length; i++) o[i] /= sd; return o; }
+const corrAt = (a, b, lag) => { let s = 0, n = 0; for (let i = 0; i < a.length; i++) { const j = i + lag; if (j < 0 || j >= b.length) continue; s += a[i] * b[j]; n++; } return n ? s / n : 0; };
+async function matchPlayer(stems, dur, tol = 6) {            // rank player packages by waveform similarity to this song's mix
+  const idx = PL.items; if (!idx) return [];
+  const cands = idx.filter((it) => it.peaks && Math.abs(it.dur - dur) <= tol); if (!cands.length) return [];
+  const mine = zscore(poolMax(peaksOf(stems, dur, 800, true), 400)), out = [];
+  for (const it of cands) {
+    const pk = await playerPeaks(it); if (!pk) continue;
+    const th = zscore(poolMax(pk, 400)); let best = -2, bl = 0; const c0 = corrAt(mine, th, 0);
+    for (let lag = -4; lag <= 4; lag++) { const c = corrAt(mine, th, lag); if (c > best) { best = c; bl = lag; } }
+    out.push({ it, score: best, lag: best - c0 > 0.03 ? bl * (dur / 400) : 0 });
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+function applyPlayerItem(id, it, lag, dur) {
+  const mk = it.markers.map((m) => ({ t: Math.round((m.t - lag) * 100) / 100, name: m.name, auto: true })).filter((m) => m.t >= 0 && m.t < dur);
+  if (mk.length < 2) return 0;
+  const mine = (S.markers[id] || []).filter((m) => !m.auto); S.markers[id] = [...mine, ...mk]; save('markers'); return mk.length;
+}
+async function tryPlayerMarkers(sg, stems, dur) {              // dur in original-timeline seconds; stems null = not decoded (duration-only match)
+  const idx = await ensurePlayerIndex(); if (!idx || !idx.length) return 0;
+  let pick = null;
+  const sameMk = (x, y) => x.markers.length === y.markers.length && x.markers.every((m, i) => Math.abs(m.t - y.markers[i].t) < 1.5 && m.name.toLowerCase() === y.markers[i].name.toLowerCase());
+  if (stems) {
+    const sc = await matchPlayer(stems, dur), b = sc[0], s2 = sc[1];       // a near-tie between two packages of the SAME song (same sections) is fine
+    if (b && b.score >= 0.8 && (!s2 || b.score - s2.score >= 0.04 || (b.score >= 0.9 && sameMk(b.it, s2.it)))) pick = { it: b.it, lag: b.lag };
+  }
+  else { const n2 = idx.filter((it) => Math.abs(it.dur - dur) <= 2), n35 = idx.filter((it) => Math.abs(it.dur - dur) <= 3.5); if (n2.length === 1 && n35.length === 1) pick = { it: n2[0], lag: 0 }; }
+  return pick ? applyPlayerItem(sg.id, pick.it, pick.lag, dur) : 0;
+}
+async function openPlayerPanel() {
+  if (!E.song) return status('Спершу відкрийте пісню'); if (guardLock()) return;
+  $('#plPanel').hidden = false; $('#plPanel').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); $('#plList').innerHTML = '<p class="muted">Завантажую список…</p>';
+  try { if (!PL.items?.length) { if (!hasToken()) await getToken(); await ensurePlayerIndex(true); } } catch (e) { $('#plList').innerHTML = `<p class="muted">Потрібен вхід у Google Drive: ${e.message}</p>`; return; }
+  if (!PL.items?.length) { $('#plList').innerHTML = '<p class="muted">Плеєр-пакетів не знайдено (папка «_плеєр» поруч із папкою Playback).</p>'; return; }
+  const dur = E.baseDur * E.tempo; PL.scores = new Map();
+  renderPlayerList(dur);
+  if (hasToken()) { const sc = await matchPlayer(E.stems, dur, 12); sc.forEach((x) => PL.scores.set(x.it.id, x)); renderPlayerList(dur); }
+}
+function renderPlayerList(dur) {
+  const q = $('#plSearch').value.toLowerCase(), box = $('#plList'); box.innerHTML = '';
+  const top = PL.scores && PL.scores.size ? [...PL.scores.values()].sort((a, b) => b.score - a.score)[0] : null;
+  $('#plInfo').textContent = `Тривалість цієї пісні ${fmt(dur)}. Список упорядковано за схожістю хвилі й тривалості${top ? `; найімовірніше — «${top.it.name}» (${Math.round(top.score * 100)}%)` : ''}.`;
+  PL.items.filter((it) => it.name.toLowerCase().includes(q) && it.markers.length).map((it) => ({ it, sc: PL.scores?.get(it.id) }))
+    .sort((a, b) => (b.sc?.score ?? -1) - (a.sc?.score ?? -1) || Math.abs(a.it.dur - dur) - Math.abs(b.it.dur - dur)).slice(0, 40).forEach(({ it, sc }) => {
+      const row = document.createElement('div'); row.className = 'pl-i' + (top && sc === top ? ' best' : '');
+      const dd = it.dur - dur;
+      row.innerHTML = '<div class="pl-t"><b></b><small></small></div><span class="pill"></span>';
+      $('b', row).textContent = it.name; $('small', row).textContent = `${fmt(it.dur)} (${dd >= 0 ? '+' : '−'}${Math.abs(dd).toFixed(1)} с) · ${it.tempo ? Math.round(it.tempo) + ' BPM · ' : ''}${it.markers.length} секцій`;
+      $('.pill', row).textContent = sc ? Math.round(sc.score * 100) + '%' : '—';
+      row.onclick = () => {
+        if (S.arr[E.song.id] && !confirm('Структуру вже змінено вручну. Замінити секціями з плеєра й скинути правки?')) return;
+        const n = applyPlayerItem(E.song.id, it, sc ? sc.lag : 0, dur);
+        if (!n) return status('У цьому пакеті немає придатних секцій');
+        delete S.arr[E.song.id]; save('arr'); arrHist.length = 0; rebuildMarkers(); $('#plPanel').hidden = true; status(`Секції взято з плеєра «${it.name}»: ${n}`);
+      };
+      box.append(row);
+    });
+}
+$('#btnPlayerMk').onclick = openPlayerPanel;
+$('#plClose').onclick = () => { $('#plPanel').hidden = true; };
+$('#plSearch').oninput = () => { if (PL.items) renderPlayerList(E.baseDur * E.tempo); };
+$('#plRefresh').onclick = async () => { try { PL.at = 0; if (!hasToken()) await getToken(); await buildPlayerIndex(); renderPlayerList(E.baseDur * E.tempo); } catch (e) { status('Плеєр-пакети: ' + e.message); } };
 
 // Small hook for debugging / automated tests
 window.PB = { seek, S, fadeGain: () => E.stems[0]?.fade.gain.value, pos: position, playing: () => E.playing, setFade, play, mark: markCurrentSection, addSong(song) { library.push(song); renderLibrary(); }, load: loadSong, state: () => ({ markers: E.markers, dur: E.dur, tempo: E.tempo, arr: S.arr[E.song?.id] || null, stems: E.stems.map((x) => ({ name: x.name, segs: x.segs.length })) }), ops: { opDelete, opDup, opMove, opSplit, opMergeNext, opRename, resetStructure, undoArr, detectGuide } };

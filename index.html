@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181703">
+<link rel="stylesheet" href="style.css?v=202611181722">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -207,8 +207,17 @@
             <div class="card hero-card">
               <div class="hc-ic"><svg class="ic"><use href="#i-mic"/></svg></div>
               <div class="hc-tx"><b>Секції по Guide</b><span>Апка слухає голосові підказки гайда (Verse, Chorus…) і розставляє секції на таймлайні.</span></div>
+              <button id="btnPlayerMk" class="btn" title="Взяти готові секції з плеєр-пакетів ubc-worship-planer на Drive"><svg class="ic"><use href="#i-sections"/></svg>З плеєра…</button>
               <button id="btnDetect" class="btn solid"><svg class="ic"><use href="#i-mic"/></svg>Визначити</button>
               <label class="sw"><input type="checkbox" id="chkDetect"><span class="trk"></span><span class="lbl">Авто для нових пісень</span></label>
+            </div>
+
+            <div id="plPanel" class="addpanel" hidden>
+              <div class="ap-h"><b>Секції з плеєра ubc-worship-planer</b><button id="plClose" class="ib" title="Закрити">✕</button></div>
+              <div id="plInfo" class="muted" style="margin-bottom:10px"></div>
+              <input id="plSearch" placeholder="Пошук за назвою проєкту…" style="margin-bottom:10px">
+              <div id="plList" class="pl-list"></div>
+              <div class="actions"><button id="plRefresh" class="btn ghost sm">↻ Оновити список із Drive</button></div>
             </div>
 
             <div class="etl-wrap"><div id="etl" class="etl"></div></div>
@@ -445,6 +454,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181703"></script>
+<script type="module" src="app.js?v=202611181723"></script>
 </body>
 </html>
