@@ -7,21 +7,72 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <div class="brand">▶ Playback</div>
-  <nav id="tabs">
-    <button data-tab="mixer" class="on">Мікшер</button>
-    <button data-tab="patch">Патч</button>
-    <button data-tab="pads">Пади</button>
-    <button data-tab="settings">Налаштування</button>
-  </nav>
-  <div id="status" class="status"></div>
+<header id="top">
+  <div class="bpmbox"><b id="bpm">—</b><span id="sig">4/4</span></div>
+  <div class="clockbox"><div id="clock">00:00</div><small id="clockSub">0:00 / 0:00</small></div>
+  <button id="btnPad" class="tbtn small" title="Пади">PAD</button>
+
+  <div class="transport">
+    <button id="btnPrev" class="tbtn" title="Попередня пісня">⏮</button>
+    <button id="btnPlay" class="tbtn play" title="Space">▶</button>
+    <button id="btnStop" class="tbtn" title="Стоп">■</button>
+    <button id="btnNext" class="tbtn" title="Наступна пісня">⏭</button>
+    <button id="btnFade" class="tbtn" title="Fade out: плавно затухнути й зупинити">◺</button>
+  </div>
+
+  <div class="right">
+    <span id="warn" class="warnbadge" hidden title="Зауваження імпорту">⚠</span>
+    <button id="btnEdit" class="tbtn small">EDIT</button>
+    <button id="btnSetlist" class="tbtn small" title="Бібліотека та сетліст">☰♪</button>
+    <button id="btnMenu" class="tbtn small" title="Меню">≡</button>
+    <div id="menu" class="menu" hidden>
+      <nav id="tabs">
+        <button data-tab="patch">Патч / роутинг</button>
+        <button data-tab="pads">Пади</button>
+        <button data-tab="settings">Налаштування</button>
+      </nav>
+    </div>
+  </div>
 </header>
 
 <main>
-  <aside>
-    <section>
-      <h3>Бібліотека <small id="libSrc"></small></h3>
+  <section id="strip">
+    <div id="cards" class="cards"><div class="empty">Додайте пісні в сетліст (☰♪) або відкрийте Demo</div></div>
+  </section>
+
+  <section id="wave">
+    <canvas id="waveCv"></canvas>
+    <div id="sections"></div>
+    <div id="playhead"></div>
+    <div id="waveHint">Оберіть пісню</div>
+  </section>
+
+  <section id="mixer">
+    <div id="strips"></div>
+    <div id="side">
+      <button id="sidePatch" class="sbtn">PATCH</button>
+      <button id="sidePad" class="sbtn">PAD<br>PLAYER</button>
+      <button id="btnLoop" class="sbtn" title="Зациклити поточну секцію (без пауз)">LOOP</button>
+      <button id="sideMute" class="sbtn" title="Вимкнути/увімкнути всі стеми">MUTE<br>ALL</button>
+      <div class="masterbox">
+        <div class="fader master"><input id="master" type="range" min="0" max="1.5" step="0.01" value="1"></div>
+        <div class="nm">Master</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="songbar"><span id="songName">Оберіть пісню</span><small id="songMeta"></small><small id="trimInfo"></small></div>
+</main>
+
+<footer><span id="status" class="status"></span></footer>
+
+<!-- Overlay panels -->
+<div id="overlay" hidden>
+  <div id="sheet">
+    <button id="closeSheet" class="close" title="Закрити">✕</button>
+
+    <section id="tab-library" class="tab" hidden>
+      <h3>Бібліотека</h3>
       <div class="row">
         <button id="btnDrive">Google Drive</button>
         <button id="btnLocal">Папка</button>
@@ -30,57 +81,54 @@
       </div>
       <input id="search" placeholder="Пошук пісні…">
       <ul id="library" class="list"></ul>
-    </section>
-    <section>
       <h3>Сетліст</h3>
       <ul id="setlist" class="list"></ul>
+      <label class="chk"><input type="checkbox" id="chkAuto"> Авто-перехід на наступну пісню</label>
     </section>
-  </aside>
 
-  <div id="content">
-    <div id="transport">
-      <div class="song"><div id="songName">Оберіть пісню</div><small id="songMeta"></small></div>
-      <button id="btnPrev" title="Попередня">⏮</button>
-      <button id="btnPlay" class="big" title="Space">▶</button>
-      <button id="btnStop" title="Стоп">■</button>
-      <button id="btnNext" title="Наступна">⏭</button>
-      <div class="seek"><input id="seek" type="range" min="0" max="1000" value="0"><span id="time">0:00 / 0:00</span></div>
-      <label class="master">Master <input id="master" type="range" min="0" max="1.5" step="0.01" value="1"></label>
-    </div>
-
-    <div id="extra">
-      <div id="markers"></div>
-      <button id="btnLoop" title="Зациклити поточну секцію (без пауз)">∞ Loop секції</button>
-      <button id="btnMark" title="Додати мітку секції в поточній позиції">＋ Секція</button>
-      <button id="btnStartHere" title="Пісня стартуватиме звідси">⇤ Старт тут</button>
-      <button id="btnEndHere" title="Пісня закінчиться тут">⇥ Кінець тут</button>
-      <button id="btnClearTrim" title="Скинути початок/кінець">✕ обрізка</button>
-      <small id="trimInfo"></small>
-      <span class="xf" title="Зміна тональності та темпу (обробка офлайн, 10–60 с). Click і Guide не транспонуються.">
+    <section id="tab-edit" class="tab" hidden>
+      <h3>Секції</h3>
+      <div class="row">
+        <button id="btnMark" title="Додати мітку секції в поточній позиції">＋ Секція тут</button>
+        <small class="hint">Клік по бейджу секції — перехід у кінці поточної; подвійний — одразу; ПКМ — видалити свою мітку.</small>
+      </div>
+      <h3>Початок / кінець</h3>
+      <div class="row">
+        <button id="btnStartHere">⇤ Старт тут</button>
+        <button id="btnEndHere">⇥ Кінець тут</button>
+        <button id="btnClearTrim">✕ Скинути</button>
+      </div>
+      <h3>Тональність і темп</h3>
+      <div class="row xf" title="Обробка офлайн. Click і Guide не транспонуються.">
         Тон <select id="xSemi" class="inline"></select>
         Темп <input id="xTempo" type="range" min="70" max="130" step="1" value="100"><b id="xTempoVal">100%</b>
         <button id="xApply">Застосувати</button><button id="xReset">Скинути</button>
-      </span>
-      <label class="chk"><input type="checkbox" id="chkAuto"> Авто-перехід</label>
-      <button id="btnFade" title="Плавно затухнути за 3 с і зупинити">Fade out</button>
-      <button id="btnExport" title="Зберегти стеми як WAV у папку (напр. синхронізовану з Drive)">⬇ Експорт стемів</button>
+      </div>
+      <h3>Експорт</h3>
+      <div class="row">
+        <button id="btnExport" title="Зберегти стеми як WAV у папку (напр. синхронізовану з Drive)">⬇ Експорт стемів (WAV)</button>
+      </div>
       <details id="report" hidden><summary></summary><ul></ul></details>
-    </div>
-    <section id="tab-mixer" class="tab"><div id="strips"></div></section>
+    </section>
+
     <section id="tab-patch" class="tab" hidden>
+      <h3>Патч / роутинг</h3>
       <div class="row">
         <button id="patchAuto">Авто-патч (пари підряд)</button>
         <button id="patchMain">Усе на 1–2</button>
         <button id="patchClear">Очистити</button>
         <button id="patchSmart" title="Click → вихід 3, Guide → вихід 4, решта → 1–2">Smart (Click/Guide окремо)</button>
+      </div>
+      <div class="row">
         <select id="presetSel" class="inline"></select>
         <button id="presetSave">Зберегти пресет</button>
         <button id="presetLoad">Застосувати</button>
         <button id="presetDel">Видалити</button>
-        <span class="hint">Клік по заголовку виходу — тестовий тон. Патч запам'ятовується за назвою стему для всіх пісень.</span>
+        <span class="hint">Клік по заголовку виходу — тестовий тон. Патч запам'ятовується за назвою стему.</span>
       </div>
       <div id="matrix" class="matrix-wrap"></div>
     </section>
+
     <section id="tab-pads" class="tab" hidden>
       <h3>Ambient-пади</h3>
       <p class="hint">Грають незалежно від пісні й мають власні виходи. Натисніть тональність — плавний вхід; ще раз — плавний вихід.</p>
@@ -92,19 +140,16 @@
         <button id="padStop">■ Зупинити пад</button>
       </div>
     </section>
+
     <section id="tab-settings" class="tab" hidden>
       <h3>Аудіовихід (Dante)</h3>
       <div class="form">
-        <label>Пристрій
-          <select id="device"></select>
-        </label>
+        <label>Пристрій <select id="device"></select></label>
         <button id="btnPickDevice">Вибрати пристрій…</button>
-        <label>Кількість виходів
-          <select id="outCount"></select>
-        </label>
+        <label>Кількість виходів <select id="outCount"></select></label>
         <div id="deviceInfo" class="hint"></div>
       </div>
-      <p class="hint">Встановіть <b>Dante Virtual Soundcard</b> (Mac/Win), у системі оберіть її як вихід, у Chrome — теж. Канали DVS (до 64) з'являться тут як виходи; підписки DVS → пульт робляться в Dante Controller. Sample rate DVS має бути 48 kHz.</p>
+      <p class="hint">Встановіть <b>Dante Virtual Soundcard</b> (Mac/Win), у Chrome оберіть її як вихід. Канали DVS (до 64) з'являться тут як виходи; підписки DVS → пульт робляться в Dante Controller. Sample rate DVS — 48 kHz.</p>
 
       <h3>MIDI-пульт</h3>
       <div class="form"><button id="btnMidi">Увімкнути MIDI</button><div id="midiInfo" class="hint"></div></div>
@@ -116,10 +161,10 @@
         <label>Папка з плейбеками (посилання або ID) <input id="rootFolder" placeholder="https://drive.google.com/drive/folders/…"></label>
         <button id="btnSaveDrive">Зберегти</button>
       </div>
-      <p class="hint">Структура: головна папка → підпапка на пісню → аудіофайли-стеми (wav/mp3/m4a/flac/ogg). Назва файлу = назва стему. Файли кешуються у браузері, тож після першого завантаження працює офлайн.</p>
+      <p class="hint">Структура: головна папка → підпапка на пісню → аудіофайли-стеми. Назва файлу = назва стему. Файли кешуються в браузері.</p>
     </section>
   </div>
-</main>
+</div>
 <script type="module" src="app.js"></script>
 </body>
 </html>

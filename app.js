@@ -145,7 +145,7 @@ function fadeOutStop(sec = 3) {
   g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + sec);
   setTimeout(() => { stop(); g.cancelScheduledValues(E.ctx.currentTime); g.setValueAtTime(E.masterVol, E.ctx.currentTime); }, sec * 1000 + 50);
 }
-const syncPlayBtn = () => { $('#btnPlay').textContent = E.playing ? '❚❚' : '▶'; };
+const syncPlayBtn = () => { $('#btnPlay').textContent = E.playing ? '❚❚' : '▶'; $('#btnPlay').classList.toggle('playing', E.playing); };
 
 function testTone(ch) {
   if (!E.ctx || ch >= E.nOut) return;
@@ -309,7 +309,9 @@ async function loadSong(song, xf = S.xform[song.id]) {
     E.tempo = 1;
     if (xf && (xf.semi || xf.tempo !== 1)) await transformStems(xf.semi, xf.tempo);
     if (current !== song) return;
-    E.ablMarkers = extra.markers || []; rebuildMarkers(); E.pos = startPos(); showTrim();
+    E.ablMarkers = extra.markers || []; E.pos = startPos(); showTrim();
+    E.bpm = extra.tempo ? extra.tempo * E.tempo : 0; $('#bpm').textContent = E.bpm ? String(Math.round(E.bpm * 10) / 10).replace(/\.0$/, '') : '—';
+    computePeaks(); drawWave(); rebuildMarkers();
     E.stems.forEach(buildStemNodes);
     $('#songMeta').textContent = `${E.stems.length} стемів · ${fmt(E.dur)}` + (extra.tempo ? ` · ${extra.tempo} BPM` : '');
     renderMarkers(); renderReport(extra.warnings || []);
@@ -336,7 +338,23 @@ function renderLibrary() {
     ul.append(li);
   });
 }
+function hueOf(str) { let h = 0; for (const c of str) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 360; }
+function renderCards() {
+  const box = $('#cards'); box.innerHTML = '';
+  const list = S.setlist.map((id) => library.find((x) => x.id === id)).filter(Boolean);
+  if (!list.length) { box.innerHTML = '<div class="empty">Додайте пісні в сетліст (☰♪) або відкрийте Demo</div>'; return; }
+  list.forEach((sg) => {
+    const h = hueOf(sg.name), ini = sg.name.split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+    const x = S.xform[sg.id], tag = x ? [x.semi ? (x.semi > 0 ? '+' : '') + x.semi + ' ст' : '', x.tempo !== 1 ? Math.round(x.tempo * 100) + '%' : ''].filter(Boolean).join(' ') : '';
+    const el = document.createElement('div'); el.className = 'card' + (sg === current ? ' cur' : '');
+    el.innerHTML = '<div class="art"><i>→</i></div><div class="nm"></div>';
+    const art = $('.art', el); art.style.background = `linear-gradient(135deg,hsl(${h} 52% 40%),hsl(${(h + 45) % 360} 58% 20%))`;
+    art.prepend(ini); $('.nm', el).textContent = sg.name; if (tag) { const em = document.createElement('em'); em.textContent = `(${tag})`; $('.nm', el).append(em); }
+    el.onclick = () => loadSong(sg); box.append(el);
+  });
+}
 function renderSetlist() {
+  renderCards();
   const ul = $('#setlist'); ul.innerHTML = '';
   S.setlist.forEach((id, i) => {
     const s = library.find((x) => x.id === id); if (!s) return;
@@ -354,15 +372,15 @@ function renderMixer() {
   const box = $('#strips'); box.innerHTML = '';
   E.stems.forEach((st) => {
     const el = document.createElement('div'); el.className = 'strip';
-    el.innerHTML = `<div class="nm"></div><div class="rt"></div>
+    el.innerHTML = `<div class="ms"><button class="s" title="Solo">S</button><button class="m" title="Mute">M</button></div>
       <div class="fader"><input type="range" min="0" max="1.5" step="0.01"><div class="meter"><i></i></div></div>
-      <div class="ms"><button class="m">M</button><button class="s">S</button></div>`;
+      <div class="nm"></div><div class="rt"></div>`;
     $('.nm', el).textContent = st.name; $('.rt', el).textContent = routeLabel(st);
     const f = $('input', el); f.value = st.vol; f.oninput = () => { st.vol = +f.value; applyGain(st); saveMix(); };
     f.ondblclick = () => { f.value = st.vol = 1; applyGain(st); saveMix(); };
     $('.m', el).onclick = (e) => { st.mute = !st.mute; e.target.classList.toggle('on', st.mute); applyGain(st); saveMix(); };
     $('.s', el).onclick = (e) => { st.solo = !st.solo; e.target.classList.toggle('on', st.solo); E.stems.forEach(applyGain); };
-    $('.m', el).classList.toggle('on', st.mute); f.value = st.vol;
+    $('.m', el).classList.toggle('on', st.mute);
     st.meter = $('.meter i', el); st.rt = $('.rt', el); box.append(el);
   });
 }
@@ -402,21 +420,68 @@ function rebuildMarkers() {
   E.markers = [...(E.ablMarkers || []), ...mine].map((m) => ({ ...m, t0: m.t, t: m.t / E.tempo })).sort((a, b) => a.t - b.t);
   renderMarkers();
 }
+const SEC_COLORS = { I: '#9b6bff', V: '#4c9dff', Pc: '#ffb020', C: '#22d6a0', B: '#ff6bb5', Tg: '#ff8a4c', O: '#8a91a2', In: '#4dd0e1' };
+function secInfo(name) {
+  const n = (name || '').trim(), l = n.toLowerCase(), num = (l.match(/(\d+)\s*$/) || [])[1] || '';
+  const T = [[/intro|вступ/, 'I'], [/pre|пре/, 'Pc'], [/verse|куплет|^v\d*$/, 'V'], [/chorus|приспів|^c\d*$/, 'C'], [/bridge|брідж|^b\d*$/, 'B'], [/tag|тег/, 'Tg'], [/outro|кінц|^end/, 'O'], [/inst|інстр/, 'In']];
+  for (const [re, code] of T) if (re.test(l)) return { code: code + (['I', 'O', 'Tg', 'In'].includes(code) ? '' : num), color: SEC_COLORS[code] };
+  return { code: n.slice(0, 3) || '•', color: '#8a91a2' };
+}
 function renderMarkers() {
-  const box = $('#markers'); box.innerHTML = '';
-  E.markers.forEach((m, i) => {
-    const b = document.createElement('button'); b.textContent = `${m.name || '•'} · ${fmt(m.t)}`; b.dataset.i = i;
-    if (E.queue === m.t) b.classList.add('queued');
-    b.title = 'Клік — перейти в кінці поточної секції; подвійний клік — одразу; ПКМ — видалити свою мітку';
-    b.onclick = () => { if (E.playing) { E.queue = m.t; renderMarkers(); } else seek(m.t); };
-    b.ondblclick = () => { E.queue = null; seek(m.t); renderMarkers(); };
+  const box = $('#sections'); box.innerHTML = '';
+  if (!E.dur) return;
+  sections().forEach((sc, i) => {
+    const m = E.markers[i], info = secInfo(sc.name);
+    const el = document.createElement('div'); el.className = 'sec'; if (E.queue === sc.start) el.classList.add('queued');
+    el.style.cssText = `left:${(sc.start / E.dur) * 100}%;width:${((sc.end - sc.start) / E.dur) * 100}%;--c:${info.color}`;
+    el.innerHTML = '<div class="bg"></div><div class="bar"></div><div class="badge"></div>';
+    const b = $('.badge', el); b.textContent = info.code;
+    b.title = `${sc.name || 'секція'} · ${fmt(sc.start)}\nКлік — перейти в кінці поточної секції; подвійний клік — одразу; ПКМ — видалити свою мітку`;
+    b.onclick = (e) => { e.stopPropagation(); if (E.playing) { E.queue = sc.start; renderMarkers(); } else seek(sc.start); };
+    b.ondblclick = (e) => { e.stopPropagation(); E.queue = null; seek(sc.start); renderMarkers(); };
     b.oncontextmenu = (e) => {
-      e.preventDefault(); const mine = S.markers[E.song.id] || []; const k = mine.findIndex((x) => x.t === m.t0 && x.name === m.name);
+      e.preventDefault(); e.stopPropagation(); const mine = S.markers[E.song.id] || [];
+      const k = mine.findIndex((x) => x.t === m.t0 && x.name === m.name);
       if (k >= 0) { mine.splice(k, 1); S.markers[E.song.id] = mine; save('markers'); rebuildMarkers(); }
     };
-    box.append(b);
+    box.append(el);
   });
 }
+// ── Waveform ──
+function computePeaks() {
+  const bins = 1400, pk = new Float32Array(bins), dur = E.dur;
+  if (!dur) { E.peaks = null; return; }
+  for (const st of E.stems) {
+    if (/click|metronome|метроном|guide|cue|гайд/i.test(st.name)) continue;
+    for (const g of st.segs) {
+      const ch = g.buffer.getChannelData(0), sr = g.buffer.sampleRate;
+      const b0 = Math.max(0, Math.floor((g.t / dur) * bins)), b1 = Math.min(bins, Math.ceil(((g.t + g.d) / dur) * bins));
+      for (let b = b0; b < b1; b++) {
+        const t0 = (b / bins) * dur, t1 = ((b + 1) / bins) * dur;
+        const f0 = Math.max(0, Math.floor((g.off + (t0 - g.t) * g.rate) * sr)), f1 = Math.min(ch.length, Math.floor((g.off + (t1 - g.t) * g.rate) * sr));
+        const step = Math.max(1, Math.floor((f1 - f0) / 40)); let m = 0;
+        for (let i = f0; i < f1; i += step) { const v = Math.abs(ch[i]); if (v > m) m = v; }
+        pk[b] += m;
+      }
+    }
+  }
+  const mx = Math.max(...pk) || 1;
+  E.peaks = pk.map((v) => Math.pow(v / mx, 0.65));
+}
+function drawWave() {
+  const cv = $('#waveCv'), r = cv.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+  cv.width = Math.max(1, r.width * dpr); cv.height = Math.max(1, r.height * dpr);
+  const g = cv.getContext('2d'); g.clearRect(0, 0, cv.width, cv.height);
+  $('#waveHint').hidden = !!E.peaks;
+  const pk = E.peaks; if (!pk) return;
+  const n = pk.length, mid = cv.height / 2, h = cv.height * 0.4; g.fillStyle = 'rgba(236,238,242,.85)';
+  for (let x = 0; x < cv.width; x += 2 * dpr) {
+    const hh = Math.max(1, pk[Math.min(n - 1, Math.floor((x / cv.width) * n))] * h);
+    g.fillRect(x, mid - hh, Math.max(1, 1.4 * dpr), hh * 2);
+  }
+}
+new ResizeObserver(drawWave).observe($('#wave'));
+$('#wave').onclick = (e) => { if (!E.dur) return; const r = e.currentTarget.getBoundingClientRect(); E.queue = null; seek(((e.clientX - r.left) / r.width) * E.dur); renderMarkers(); };
 function markCurrentSection() {
   if (!E.song) return;
   const name = prompt('Назва секції (Verse, Chorus, Bridge…)', ''); if (name === null) return;
@@ -428,7 +493,7 @@ function saveMix() {
   S.mix[E.song.id] = Object.fromEntries(E.stems.map((s) => [key(s.name), { vol: s.vol, mute: s.mute }])); save('mix');
 }
 function renderReport(w) {
-  const d = $('#report'); d.hidden = !w.length;
+  const d = $('#report'); d.hidden = !w.length; $('#warn').hidden = !w.length;
   $('#report summary').textContent = `⚠ Зауваження імпорту (${w.length})`;
   const ul = $('#report ul'); ul.innerHTML = '';
   w.forEach((x) => { const li = document.createElement('li'); li.textContent = x; ul.append(li); });
@@ -487,10 +552,14 @@ async function exportStems() {
 }
 
 function selectTab(t) {
-  document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
-  document.querySelectorAll('.tab').forEach((s) => { s.hidden = s.id !== 'tab-' + t; });
+  $('#menu').hidden = true;
+  const ov = $('#overlay');
+  if (!t || t === 'mixer') { ov.hidden = true; return; }
+  ov.hidden = false;
+  document.querySelectorAll('.tab').forEach((x) => { x.hidden = x.id !== 'tab-' + t; });
   if (t === 'patch') renderMatrix();
   if (t === 'pads') renderPads();
+  if (t === 'library') { renderLibrary(); renderSetlist(); }
 }
 
 async function fillDevices() {
@@ -511,10 +580,12 @@ async function changeAudio() {
 
 function tick() {
   if (E.stems.length) {
-    const p = position(); $('#time').textContent = `${fmt(p)} / ${fmt(E.dur)}`;
-    if (!seeking) $('#seek').value = E.dur ? (p / E.dur) * 1000 : 0;
+    const p = position();
+    $('#clock').textContent = `${String(Math.floor(p / 60)).padStart(2, '0')}:${String(Math.floor(p % 60)).padStart(2, '0')}`;
+    $('#clockSub').textContent = `-${fmt(Math.max(0, E.dur - p))} / ${fmt(E.dur)}`;
+    $('#playhead').style.left = (E.dur ? (p / E.dur) * 100 : 0) + '%';
     const cs = sectionAt(p), ci = cs ? E.markers.findIndex((m) => m.t === cs.start) : -1;
-    document.querySelectorAll('#markers button').forEach((b) => b.classList.toggle('cur', +b.dataset.i === ci));
+    document.querySelectorAll('#sections .sec').forEach((el, i) => el.classList.toggle('cur', i === ci));
     E.stems.forEach((st) => {
       if (!st.meter || !st.an) return;
       st.an.getFloatTimeDomainData(st.data);
@@ -524,16 +595,24 @@ function tick() {
   }
   requestAnimationFrame(tick);
 }
-let seeking = false;
 
 // ───────────── Wiring ─────────────
 document.querySelectorAll('#tabs button').forEach((b) => (b.onclick = () => selectTab(b.dataset.tab)));
 $('#btnPlay').onclick = () => (E.playing ? pause() : play());
+$('#btnEdit').onclick = () => selectTab('edit');
+$('#btnSetlist').onclick = () => selectTab('library');
+$('#btnMenu').onclick = (e) => { e.stopPropagation(); $('#menu').hidden = !$('#menu').hidden; };
+$('#btnPad').onclick = () => selectTab('pads');
+$('#sidePatch').onclick = () => selectTab('patch');
+$('#sidePad').onclick = () => selectTab('pads');
+$('#closeSheet').onclick = () => selectTab(null);
+$('#overlay').onclick = (e) => { if (e.target.id === 'overlay') selectTab(null); };
+document.addEventListener('click', (e) => { if (!e.target.closest('#menu')) $('#menu').hidden = true; });
+addEventListener('keydown', (e) => { if (e.code === 'Escape') selectTab(null); });
+$('#sideMute').onclick = () => { const all = E.stems.length && E.stems.every((x) => x.mute); E.stems.forEach((x) => { x.mute = !all; applyGain(x); }); saveMix(); renderMixer(); };
 $('#btnStop').onclick = stop;
 $('#btnPrev').onclick = () => advance(-1);
 $('#btnNext').onclick = () => advance(1);
-$('#seek').oninput = () => { seeking = true; };
-$('#seek').onchange = (e) => { seeking = false; seek((e.target.value / 1000) * E.dur); };
 $('#master').oninput = (e) => { E.masterVol = +e.target.value; E.master.gain.value = E.masterVol; };
 $('#search').oninput = renderLibrary;
 $('#btnDrive').onclick = () => connectDrive().catch((e) => status('Drive: ' + e.message));
