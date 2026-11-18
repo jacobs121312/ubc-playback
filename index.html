@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playback</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">▶ Playback</div>
+  <nav id="tabs">
+    <button data-tab="mixer" class="on">Мікшер</button>
+    <button data-tab="patch">Патч</button>
+    <button data-tab="settings">Налаштування</button>
+  </nav>
+  <div id="status" class="status"></div>
+</header>
+
+<main>
+  <aside>
+    <section>
+      <h3>Бібліотека <small id="libSrc"></small></h3>
+      <div class="row">
+        <button id="btnDrive">Google Drive</button>
+        <button id="btnLocal">Папка</button>
+        <button id="btnDemo">Demo</button>
+      </div>
+      <input id="search" placeholder="Пошук пісні…">
+      <ul id="library" class="list"></ul>
+    </section>
+    <section>
+      <h3>Сетліст</h3>
+      <ul id="setlist" class="list"></ul>
+    </section>
+  </aside>
+
+  <div id="content">
+    <div id="transport">
+      <div class="song"><div id="songName">Оберіть пісню</div><small id="songMeta"></small></div>
+      <button id="btnPrev" title="Попередня">⏮</button>
+      <button id="btnPlay" class="big" title="Space">▶</button>
+      <button id="btnStop" title="Стоп">■</button>
+      <button id="btnNext" title="Наступна">⏭</button>
+      <div class="seek"><input id="seek" type="range" min="0" max="1000" value="0"><span id="time">0:00 / 0:00</span></div>
+      <label class="master">Master <input id="master" type="range" min="0" max="1.5" step="0.01" value="1"></label>
+    </div>
+
+    <section id="tab-mixer" class="tab"><div id="strips"></div></section>
+    <section id="tab-patch" class="tab" hidden>
+      <div class="row">
+        <button id="patchAuto">Авто-патч (пари підряд)</button>
+        <button id="patchMain">Усе на 1–2</button>
+        <button id="patchClear">Очистити</button>
+        <span class="hint">Клік по заголовку виходу — тестовий тон. Патч запам'ятовується за назвою стему для всіх пісень.</span>
+      </div>
+      <div id="matrix" class="matrix-wrap"></div>
+    </section>
+    <section id="tab-settings" class="tab" hidden>
+      <h3>Аудіовихід (Dante)</h3>
+      <div class="form">
+        <label>Пристрій
+          <select id="device"></select>
+        </label>
+        <button id="btnPickDevice">Вибрати пристрій…</button>
+        <label>Кількість виходів
+          <select id="outCount"></select>
+        </label>
+        <div id="deviceInfo" class="hint"></div>
+      </div>
+      <p class="hint">Встановіть <b>Dante Virtual Soundcard</b> (Mac/Win), у системі оберіть її як вихід, у Chrome — теж. Канали DVS (до 64) з'являться тут як виходи; підписки DVS → пульт робляться в Dante Controller. Sample rate DVS має бути 48 kHz.</p>
+
+      <h3>Google Drive</h3>
+      <div class="form">
+        <label>OAuth Client ID <input id="clientId" placeholder="xxxx.apps.googleusercontent.com"></label>
+        <label>Папка з плейбеками (посилання або ID) <input id="rootFolder" placeholder="https://drive.google.com/drive/folders/…"></label>
+        <button id="btnSaveDrive">Зберегти</button>
+      </div>
+      <p class="hint">Структура: головна папка → підпапка на пісню → аудіофайли-стеми (wav/mp3/m4a/flac/ogg). Назва файлу = назва стему. Файли кешуються у браузері, тож після першого завантаження працює офлайн.</p>
+    </section>
+  </div>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
