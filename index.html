@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181518">
+<link rel="stylesheet" href="style.css?v=202611181522">
 </head>
 <body>
 <header id="top">
@@ -82,6 +82,7 @@
         <button id="btnLocal">Папка</button>
         <button id="btnAbleton" title="Папка з проєктами Ableton (.als)">Ableton</button>
         <button id="btnDemo">Demo</button>
+        <button id="btnNewSong" title="Пісня без плейбеку: метроном + пад, зберігається під назвою пісні">＋ Без плейбеку</button>
       </div>
       <input id="search" placeholder="Пошук пісні…">
       <ul id="library" class="list"></ul>
@@ -91,6 +92,14 @@
     </section>
 
     <section id="tab-edit" class="tab" hidden>
+      <h3>Пад пісні</h3>
+      <div class="row">
+        <select id="songPadKey" class="inline"><option value="">— без паду —</option></select>
+        <label class="chk"><input type="checkbox" id="songPadAuto"> Запускати пад разом із піснею (плавний вхід), зупиняти зі стопом</label>
+        <button id="songPadNow">▶ Пад зараз</button>
+        <button id="btnClickSettings" hidden>⚙ Налаштування метронома</button>
+      </div>
+
       <h3>Структура пісні</h3>
       <div class="row">
         <button id="btnDetect" title="Розпізнати голосові підказки Guide (Verse, Chorus…) і розставити секції">🎙 Визначити по Guide</button>
@@ -180,6 +189,25 @@
       </div>
     </section>
 
+    <section id="tab-newsong" class="tab" hidden>
+      <h3 id="nsTitle">Нова пісня без плейбеку</h3>
+      <div class="form">
+        <label>Назва пісні (під цією назвою проєкт зберігається) <input id="nsName" placeholder="Напр. «Святий Святий»"></label>
+        <label>Темп, BPM <span class="row" style="margin:0"><input id="nsBpm" type="number" min="30" max="300" step="0.5" style="width:110px"><button id="nsTap" type="button">Tap</button></span></label>
+        <label>Розмір <select id="nsSig"><option>4/4</option><option>3/4</option><option>2/4</option><option>5/4</option><option>6/8</option><option>12/8</option></select></label>
+        <label>Підрозділ (тихі кліки) <select id="nsSub"><option value="none">немає</option><option value="8th">восьмі</option><option value="16th">шістнадцяті</option></select></label>
+        <label>Довжина, тактів <input id="nsBars" type="number" min="4" max="600" value="100" style="width:110px"></label>
+        <label>Пад (тональність) <select id="nsKey"><option value="">— без паду —</option></select></label>
+        <label class="chk"><input type="checkbox" id="nsAuto"> Запускати пад разом із пісенню</label>
+      </div>
+      <div class="row">
+        <button id="nsSave" class="primary">Зберегти й відкрити</button>
+        <button id="nsCancel">Скасувати</button>
+        <button id="nsDelete" hidden style="color:var(--bad)">Видалити пісню</button>
+      </div>
+      <p class="hint">Метроном: акцент на першій долі, окремий стем «Click» (патчиться на свій вихід, Smart-патч відправляє його на вихід 3). Секції, fade-out, версії, закріплення працюють як зі звичайною піснею. Проєкт зберігається під назвою пісні й потрапляє в експорт версій (його побачать інші лідери, якщо файл лежить на Drive).</p>
+    </section>
+
     <section id="tab-remote" class="tab" hidden>
       <h3>Керування з телефона</h3>
       <label class="chk"><input type="checkbox" id="remoteOn"> Увімкнути віддалене керування (телефон і ноутбук мають бути онлайн; звук лишається на ноутбуці)</label>
@@ -226,6 +254,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181518"></script>
+<script type="module" src="app.js?v=202611181522"></script>
 </body>
 </html>

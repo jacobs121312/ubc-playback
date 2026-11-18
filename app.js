@@ -1,7 +1,7 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { startHost, loadScript } from './remote-host.js?v=202611181518';
-import { detectSections } from './guide.js?v=202611181518';
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181518';
+import { startHost, loadScript } from './remote-host.js?v=202611181522';
+import { detectSections } from './guide.js?v=202611181522';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181522';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -14,6 +14,7 @@ const S = {
   index: store.get('index', {}),
   markers: store.get('markers', {}), trim: store.get('trim', {}), mix: store.get('mix', {}),
   presets: store.get('presets', {}), pad: store.get('pad', { out: [0, 1], vol: 0.5, key: 'C' }),
+  clicks: store.get('clicks', {}), songPad: store.get('songPad', {}),
   remote: store.get('remote', { on: false, id: null, pin: null }),
   ver: store.get('ver', {}), pinned: store.get('pinned', {}), fade: store.get('fade', {}),
   arr: store.get('arr', {}), trans: store.get('trans', {}), autoDetect: store.get('autoDetect', true),
@@ -126,6 +127,7 @@ async function play(lead = 0.12) {
   if (E.loading) return status('Зачекайте — пісня ще обробляється…');
   if (!E.stems.length || E.playing) return;
   await E.ctx.resume();
+  const sp = S.songPad[E.song?.id]; if (sp?.auto && sp.key && P.voice?.key !== sp.key) padStart(sp.key);
   const t0 = E.ctx.currentTime + lead;
   if (E.pos >= endPos() - 0.05) E.pos = startPos();
   E.sources = E.stems.flatMap((st) => schedule(E.ctx, st, st.g, t0, E.pos));
@@ -176,6 +178,7 @@ function halt() { E.sources.forEach((s) => { s.onended = null; try { s.stop(); }
 function pause() { if (!E.playing) return; E.pos = position(); halt(); E.playing = false; fadeNeutral(); syncPlayBtn(); }
 function stop() {
   halt(); E.playing = false; E.pendingJump = null; E.queue = null; E.pos = startPos(); fadeNeutral(); syncPlayBtn();
+  if (S.songPad[E.song?.id]?.auto && P.voice) { padStop(3); if ($('#padKeys')) renderPads(); }
   if (E.fading) { E.fading = false; E.master.gain.cancelScheduledValues(0); E.master.gain.setValueAtTime(E.masterVol, E.ctx.currentTime); }
 }
 function seek(t) { const was = E.playing; if (was) { halt(); E.playing = false; E.pendingJump = null; fadeNeutral(); } E.pos = t; if (was) play(0.03); }
@@ -374,6 +377,7 @@ async function loadSong(song, xf) {
     if (current !== song) return;
     E.stems.forEach((st) => { st.baseSegs = st.segs; }); E.baseDur = E.dur;
     E.ablMarkers = (extra.markers || []).filter((m) => m.name && !/^\d+$/.test(m.name)); E.pos = startPos(); showTrim();
+    $('#sig').textContent = song.def?.sig || '4/4';
     E.bpm = extra.tempo ? extra.tempo * E.tempo : 0; $('#bpm').textContent = E.bpm ? String(Math.round(E.bpm * 10) / 10).replace(/\.0$/, '') : '—';
     rebuildMarkers();
     E.stems.forEach(buildStemNodes);
@@ -383,7 +387,7 @@ async function loadSong(song, xf) {
     const dl = NET.downloaded - n0.downloaded, ca = NET.cached - n0.cached;
     status(hadMem ? 'Готово (з пам\'яті)' : dl ? `Готово · завантажено з Drive: ${dl} файлів, ${(((NET.bytes - n0.bytes)) / 1048576).toFixed(0)} МБ` : ca ? `Готово · з локального кешу (${ca} файлів)` : 'Готово');
     preloadNext();
-    if (S.autoDetect && song.src !== 'demo' && !baseMarkers().length && !S.arr[song.id]) setTimeout(() => { if (current === song) detectGuide(true); }, 800);
+    if (S.autoDetect && song.src !== 'demo' && song.src !== 'click' && !baseMarkers().length && !S.arr[song.id]) setTimeout(() => { if (current === song) detectGuide(true); }, 800);
   } catch (e) { $('#songMeta').textContent = 'помилка: ' + e.message; status('Помилка: ' + e.message); }
   finally { if (current === song) E.loading = false; }
 }
@@ -413,13 +417,14 @@ function renderCards() {
   const list = S.setlist.map((id) => library.find((x) => x.id === id)).filter(Boolean);
   if (!list.length) { box.innerHTML = '<div class="empty">Додайте пісні в сетліст (☰♪) або відкрийте Demo</div>'; return; }
   list.forEach((sg) => {
-    const h = hueOf(sg.name), ini = sg.name.split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+    let ini; const h = hueOf(sg.name); ini = sg.name.split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
     const x = S.xform[sg.id], tag = x ? [x.semi ? (x.semi > 0 ? '+' : '') + x.semi + ' ст' : '', x.tempo !== 1 ? Math.round(x.tempo * 100) + '%' : ''].filter(Boolean).join(' ') : '';
     const el = document.createElement('div'); el.className = 'card' + (sg === current ? ' cur' : '');
     el.innerHTML = '<div class="art"><i></i></div><div class="nm"></div>';
     const TR = { next: ['→', 'Після пісні: наступна'], stop: ['■', 'Після пісні: зупинитись'], fade: ['↘', 'Після пісні: fade out і наступна'] };
     const ti = $('i', el), setTi = () => { const m = S.trans[sg.id] || 'next'; ti.textContent = TR[m][0]; ti.title = TR[m][1] + ' (клік — змінити)'; };
     setTi(); ti.onclick = (e) => { e.stopPropagation(); const order = ['next', 'fade', 'stop']; const m = S.trans[sg.id] || 'next'; S.trans[sg.id] = order[(order.indexOf(m) + 1) % 3]; save('trans'); setTi(); };
+    if (sg.def) ini = '♩ ' + sg.def.bpm;
     const art = $('.art', el); art.style.background = `linear-gradient(135deg,hsl(${h} 52% 40%),hsl(${(h + 45) % 360} 58% 20%))`;
     art.prepend(ini); $('.nm', el).textContent = sg.name; if (tag) { const em = document.createElement('em'); em.textContent = `(${tag})`; $('.nm', el).append(em); }
     el.onclick = () => loadSong(sg); box.append(el);
@@ -660,12 +665,12 @@ addEventListener('keydown', (e) => {
 // ── Saved versions (what is played every Sunday), pinning, export/import, sharing via Drive ──
 function snapshot() {
   const id = E.song.id;
-  return JSON.parse(JSON.stringify({ arr: S.arr[id] || null, markers: S.markers[id] || [], xform: S.xform[id] || null, mix: S.mix[id] || {}, trans: S.trans[id] || 'next', trim: S.trim[id] || null, fade: S.fade[id] || null, savedAt: Date.now() }));
+  return JSON.parse(JSON.stringify({ arr: S.arr[id] || null, markers: S.markers[id] || [], xform: S.xform[id] || null, mix: S.mix[id] || {}, trans: S.trans[id] || 'next', trim: S.trim[id] || null, fade: S.fade[id] || null, pad: S.songPad[id] || null, savedAt: Date.now() }));
 }
 function restoreState(id, sn) {
   const set = (k, v, empty) => { if (v == null || (empty && empty(v))) delete S[k][id]; else S[k][id] = JSON.parse(JSON.stringify(v)); save(k); };
   set('arr', sn.arr); set('markers', sn.markers, (v) => !v.length); set('xform', sn.xform); set('mix', sn.mix, (v) => !Object.keys(v).length);
-  set('trans', sn.trans && sn.trans !== 'next' ? sn.trans : null); set('trim', sn.trim); set('fade', sn.fade);
+  set('trans', sn.trans && sn.trans !== 'next' ? sn.trans : null); set('trim', sn.trim); set('fade', sn.fade); set('songPad', sn.pad);
 }
 function pinnedVersion(id) { const v = S.ver[id]; return S.pinned[id] && v && v.list[v.main] ? v.list[v.main] : null; }
 function renderVersions() {
@@ -704,10 +709,12 @@ $('#chkPin').onchange = (e) => {
   } else { delete S.pinned[id]; save('pinned'); }
   renderVersions();
 };
-function exportData() { return { format: 'ubc-playback-versions', v: 1, exportedAt: Date.now(), ver: S.ver, pinned: S.pinned, songs: Object.fromEntries(library.map((l) => [l.id, l.name])) }; }
+function exportData() { return { format: 'ubc-playback-versions', v: 1, exportedAt: Date.now(), ver: S.ver, pinned: S.pinned, clicks: S.clicks, songs: Object.fromEntries(library.map((l) => [l.id, l.name])) }; }
 function mergeVersions(d) {
   if (!d || d.format !== 'ubc-playback-versions') throw new Error('Це не файл версій Playback');
   let n = 0;
+  for (const [id, c] of Object.entries(d.clicks || {})) if (!S.clicks[id] || (c.updated || 0) > (S.clicks[id].updated || 0)) { S.clicks[id] = c; n++; }
+  if (d.clicks) { save('clicks'); syncClickLibrary(); }
   for (const [id, v] of Object.entries(d.ver || {})) {
     const mine = S.ver[id] ||= { list: {}, main: v.main };
     for (const [name, sn] of Object.entries(v.list || {})) if (!mine.list[name] || (sn.savedAt || 0) > (mine.list[name].savedAt || 0)) { mine.list[name] = sn; n++; }
@@ -958,7 +965,7 @@ function selectTab(t) {
   if (t === 'patch') renderMatrix();
   if (t === 'pads') renderPads();
   if (t === 'library') { renderLibrary(); renderSetlist(); }
-  if (t === 'edit') { renderVersions(); renderStructure(); }
+  if (t === 'edit') { renderVersions(); renderStructure(); renderSongPad(); }
   if (t === 'remote') renderRemote();
 }
 
@@ -1054,7 +1061,7 @@ async function transformStems(semi, tempo) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181518', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181522', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -1079,6 +1086,7 @@ $('#xSemi').value = 0;
 $('#xTempo').oninput = (e) => { $('#xTempoVal').textContent = e.target.value + '%'; };
 $('#xApply').onclick = () => {
   if (!current || guardLock()) return;
+  if (current.src === 'click') return status('Для метронома змініть BPM у «⚙ Налаштування метронома»');
   const x = { semi: +$('#xSemi').value, tempo: +$('#xTempo').value / 100 };
   if (x.semi || x.tempo !== 1) S.xform[current.id] = x; else delete S.xform[current.id];
   save('xform'); loadSong(current, x);
@@ -1253,6 +1261,74 @@ $('#remoteOn').onchange = (e) => { S.remote.on = e.target.checked; remoteApply()
 $('#remoteNew').onclick = () => { S.remote.id = null; S.remote.pin = null; remoteApply(); };
 $('#remoteCopy').onclick = async () => { try { await navigator.clipboard.writeText(remoteUrl()); status('Посилання скопійовано'); } catch { $('#remoteUrl').select(); } };
 if (S.remote.on) remoteApply();
+
+// ── Songs without a playback: metronome (click) + pad, saved under the song's name ──
+const SIGS = { '4/4': { bpb: 4, comp: false }, '3/4': { bpb: 3, comp: false }, '2/4': { bpb: 2, comp: false }, '5/4': { bpb: 5, comp: false }, '6/8': { bpb: 2, comp: true }, '12/8': { bpb: 4, comp: true } };
+function makeBarBuffer(def) {                      // one bar of click: accent on 1, softer beats, quiet subdivisions
+  const sr = 48000, { bpb, comp } = SIGS[def.sig] || SIGS['4/4'], beat = 60 / def.bpm;
+  const sub = def.sub === '8th' ? (comp ? 3 : 2) : def.sub === '16th' ? (comp ? 6 : 4) : 1;
+  const n = Math.round(bpb * beat * sr), buf = E.ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+  const tick = (t, f, a) => { const i0 = Math.round(t * sr), len = Math.floor(0.05 * sr); for (let k = 0; k < len && i0 + k < n; k++) { const x = k / sr; d[i0 + k] += a * (Math.sin(2 * Math.PI * f * x) * Math.exp(-x * 85) + 0.3 * Math.sin(2 * Math.PI * f * 2.76 * x) * Math.exp(-x * 150)); } };
+  for (let b = 0; b < bpb; b++) { tick(b * beat, b === 0 ? 1760 : 1175, b === 0 ? 0.85 : 0.55); for (let k = 1; k < sub; k++) tick(b * beat + (k * beat) / sub, 880, 0.2); }
+  return buf;
+}
+function buildClickSong(def) {
+  const buf = makeBarBuffer(def), bars = Math.max(4, def.bars || 100), barDur = buf.duration;
+  const segs = Array.from({ length: bars }, (_, i) => ({ t: i * barDur, d: barDur, off: 0, rate: 1, buffer: buf, cutIn: false, cutOut: false }));
+  return { stems: [{ name: 'Click', channels: 1, segs, vol: 1 }], dur: bars * barDur, tempo: def.bpm, markers: [], warnings: [] };
+}
+const clickEntry = (def) => ({ id: def.id, name: def.name, src: 'click', def, prefetch: async () => {}, load: async () => buildClickSong(def) });
+function syncClickLibrary() {
+  library = library.filter((x) => x.src !== 'click').concat(Object.values(S.clicks).map(clickEntry));
+  renderLibrary(); renderSetlist();
+}
+const slug = (n) => n.toLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') || 'song';
+const NS = { editId: null, taps: [] };
+function openNewSong(def) {
+  NS.editId = def?.id || null; NS.taps = [];
+  $('#nsTitle').textContent = def ? 'Налаштування метронома' : 'Нова пісня без плейбеку';
+  $('#nsName').value = def?.name || ''; $('#nsBpm').value = def?.bpm || 72; $('#nsSig').value = def?.sig || '4/4'; $('#nsSub').value = def?.sub || 'none';
+  $('#nsBars').value = def?.bars || 100; const sp = S.songPad[def?.id] || {}; $('#nsKey').value = sp.key || ''; $('#nsAuto').checked = def ? !!sp.auto : true;
+  $('#nsDelete').hidden = !def; $('#nsName').disabled = false;
+  selectTab('newsong');
+}
+function saveNewSong() {
+  const name = $('#nsName').value.trim(), bpm = +$('#nsBpm').value;
+  if (!name) return status('Вкажіть назву пісні'); if (!(bpm >= 30 && bpm <= 300)) return status('BPM має бути від 30 до 300');
+  let id = NS.editId;
+  if (!id) { id = 'click:' + slug(name); let k = 2; while (S.clicks[id]) id = 'click:' + slug(name) + '-' + k++; }
+  S.clicks[id] = { id, name, bpm: Math.round(bpm * 10) / 10, sig: $('#nsSig').value, sub: $('#nsSub').value, bars: Math.max(4, Math.min(600, +$('#nsBars').value || 100)), updated: Date.now() }; save('clicks');
+  const key = $('#nsKey').value; if (key) S.songPad[id] = { key, auto: $('#nsAuto').checked }; else delete S.songPad[id]; save('songPad');
+  syncClickLibrary();
+  if (!S.setlist.includes(id)) { S.setlist.push(id); save('setlist'); }
+  selectTab(null); const entry = library.find((x) => x.id === id); renderSetlist(); loadSong(entry); status(`Збережено «${name}» (${S.clicks[id].bpm} BPM, ${S.clicks[id].sig})`);
+}
+$('#btnNewSong').onclick = () => openNewSong(null);
+$('#btnClickSettings').onclick = () => { if (current?.src === 'click') openNewSong(S.clicks[current.id]); else status('Це не метроном-пісня'); };
+$('#nsSave').onclick = saveNewSong; $('#nsCancel').onclick = () => selectTab(null);
+$('#nsDelete').onclick = () => {
+  const id = NS.editId; if (!id || !confirm(`Видалити «${S.clicks[id].name}» назавжди (проєкт, секції, версії)?`)) return;
+  [S.clicks, S.songPad, S.arr, S.markers, S.mix, S.xform, S.trans, S.trim, S.fade, S.ver, S.pinned].forEach((o) => delete o[id]);
+  ['clicks', 'songPad', 'arr', 'markers', 'mix', 'xform', 'trans', 'trim', 'fade', 'ver', 'pinned'].forEach(save);
+  S.setlist = S.setlist.filter((x) => x !== id); save('setlist'); stop(); current = null; E.stems = []; E.song = null; E.dur = 0;
+  syncClickLibrary(); renderMixer(); renderMarkers(); drawWave(); selectTab(null); status('Пісню видалено');
+};
+$('#nsTap').onclick = () => {
+  const n = performance.now(); if (NS.taps.length && n - NS.taps[NS.taps.length - 1] > 2000) NS.taps = [];
+  NS.taps.push(n); if (NS.taps.length > 8) NS.taps.shift();
+  if (NS.taps.length >= 2) { const iv = (NS.taps[NS.taps.length - 1] - NS.taps[0]) / (NS.taps.length - 1); $('#nsBpm').value = Math.round((60000 / iv) * 10) / 10; }
+};
+KEYS.forEach((k) => $('#nsKey').append(new Option(k, k)));
+// pad per song (for any song, with or without playback)
+KEYS.forEach((k) => $('#songPadKey').append(new Option(k, k)));
+function renderSongPad() { const sp = S.songPad[E.song?.id] || {}; $('#songPadKey').value = sp.key || ''; $('#songPadAuto').checked = !!sp.auto; $('#btnClickSettings').hidden = E.song?.src !== 'click'; }
+const saveSongPad = () => {
+  if (!E.song || guardLock()) return; const key = $('#songPadKey').value;
+  if (key) S.songPad[E.song.id] = { key, auto: $('#songPadAuto').checked }; else delete S.songPad[E.song.id]; save('songPad');
+};
+$('#songPadKey').onchange = saveSongPad; $('#songPadAuto').onchange = saveSongPad;
+$('#songPadNow').onclick = () => { const k = $('#songPadKey').value; if (k) padStart(k); };
+syncClickLibrary();
 
 // Small hook for debugging / automated tests
 window.PB = { seek, S, fadeGain: () => E.stems[0]?.fade.gain.value, pos: position, playing: () => E.playing, setFade, play, mark: markCurrentSection, addSong(song) { library.push(song); renderLibrary(); }, load: loadSong, state: () => ({ markers: E.markers, dur: E.dur, tempo: E.tempo, arr: S.arr[E.song?.id] || null, stems: E.stems.map((x) => ({ name: x.name, segs: x.segs.length })) }), ops: { opDelete, opDup, opMove, opSplit, opMergeNext, opRename, resetStructure, undoArr, detectGuide } };
