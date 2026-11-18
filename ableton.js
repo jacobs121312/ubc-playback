@@ -8,7 +8,7 @@ export async function indexFolder(root, maxDepth = 6) {
     for await (const [name, h] of dir.entries()) {
       if (name.startsWith('.')) continue;
       if (h.kind === 'directory') { if (depth < maxDepth && name !== 'Backup') await walk(h, [...parts, name], depth + 1); }
-      else if (AUDIO_RE.test(name) || /\.als$/i.test(name)) files.push({ parts: [...parts, name], name, handle: h });
+      else if (AUDIO_RE.test(name) || /\.als$/i.test(name) || name === 'markers-cache.json') files.push({ parts: [...parts, name], name, handle: h });
     }
   }
   await walk(root, [], 0);

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback</title>
-<link rel="stylesheet" href="style.css?v=202611181413">
+<link rel="stylesheet" href="style.css?v=202611181423">
 </head>
 <body>
 <header id="top">
@@ -87,11 +87,17 @@
     </section>
 
     <section id="tab-edit" class="tab" hidden>
-      <h3>Секції</h3>
+      <h3>Структура пісні</h3>
       <div class="row">
-        <button id="btnMark" title="Додати мітку секції в поточній позиції">＋ Секція тут</button>
-        <small class="hint">Клік по бейджу секції — перехід у кінці поточної; подвійний — одразу; ПКМ — видалити свою мітку.</small>
+        <button id="btnDetect" title="Розпізнати голосові підказки Guide (Verse, Chorus…) і розставити секції">🎙 Визначити по Guide</button>
+        <button id="btnMark" title="Додати секцію в позиції курсору">＋ Секція тут</button>
+        <button id="btnSplit" title="Розділити секцію в позиції курсору на дві">✂ Розділити тут</button>
+        <button id="btnUndo" title="Скасувати (Cmd+Z)">↶ Скасувати</button>
+        <button id="btnResetStruct" title="Повернути початкову структуру">Скинути</button>
       </div>
+      <label class="chk"><input type="checkbox" id="chkDetect"> Автоматично визначати секції по Guide для пісень без розмітки (перший раз завантажується модель ~40 МБ)</label>
+      <div id="structList" class="structlist"></div>
+      <p class="hint">Правки структури змінюють саму пісню: видалена секція не гратиме, дубльована повториться, порядок можна міняти. «⇤» ставить початок секції в позицію курсору. Експорт стемів теж бере вже змінену структуру. Початок/кінець нижче діє, поки структуру не змінено.</p>
       <h3>Початок / кінець</h3>
       <div class="row">
         <button id="btnStartHere">⇤ Старт тут</button>
@@ -169,6 +175,6 @@
     </section>
   </div>
 </div>
-<script type="module" src="app.js?v=202611181413"></script>
+<script type="module" src="app.js?v=202611181423"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181413';
+import { detectSections } from './guide.js?v=202611181423';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181423';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -12,6 +13,7 @@ const S = {
   index: store.get('index', {}),
   markers: store.get('markers', {}), trim: store.get('trim', {}), mix: store.get('mix', {}),
   presets: store.get('presets', {}), pad: store.get('pad', { out: [0, 1], vol: 0.5, key: 'C' }),
+  arr: store.get('arr', {}), trans: store.get('trans', {}), autoDetect: store.get('autoDetect', true),
   autoAdvance: store.get('autoAdvance', true), preload: store.get('preload', false), xform: store.get('xform', {}),
 };
 const save = (k) => store.set(k, S[k]);
@@ -74,8 +76,8 @@ function setPatch(name, routes) {
 }
 
 const trimOf = () => S.trim[E.song?.id] || {};
-const startPos = () => (trimOf().start || 0) / E.tempo;
-const endPos = () => (trimOf().end ? Math.min(trimOf().end / E.tempo, E.dur) : E.dur);
+const startPos = () => (S.arr[E.song?.id] ? 0 : (trimOf().start || 0) / E.tempo);
+const endPos = () => (!S.arr[E.song?.id] && trimOf().end ? Math.min(trimOf().end / E.tempo, E.dur) : E.dur);
 function position() {
   if (E.pendingJump && E.ctx.currentTime >= E.pendingJump.tb) { E.startedAt = E.pendingJump.tb - E.pendingJump.target; E.pendingJump = null; }
   return E.playing ? Math.min(E.ctx.currentTime - E.startedAt, E.dur) : E.pos;
@@ -134,11 +136,19 @@ setInterval(() => {          // scheduler: queued/looped section jumps + end of 
       return;
     }
   }
-  if (p >= endPos() - 0.05 && !E.pendingJump) { stop(); if (S.autoAdvance) advance(1, true); }
+  const mode = S.trans[E.song?.id] || 'next';
+  if (mode === 'fade' && !E.fading && !E.pendingJump && p >= endPos() - 3 && p < endPos() - 0.1) {
+    E.fading = true; const g = E.master.gain, t = E.ctx.currentTime;
+    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + (endPos() - p));
+  }
+  if (p >= endPos() - 0.05 && !E.pendingJump) { stop(); if (mode !== 'stop' && S.autoAdvance) advance(1, true); }
 }, 25);
 function halt() { E.sources.forEach((s) => { s.onended = null; try { s.stop(); } catch {} }); E.sources = []; }
 function pause() { if (!E.playing) return; E.pos = position(); halt(); E.playing = false; syncPlayBtn(); }
-function stop() { halt(); E.playing = false; E.pendingJump = null; E.queue = null; E.pos = startPos(); syncPlayBtn(); }
+function stop() {
+  halt(); E.playing = false; E.pendingJump = null; E.queue = null; E.pos = startPos(); syncPlayBtn();
+  if (E.fading) { E.fading = false; E.master.gain.cancelScheduledValues(0); E.master.gain.setValueAtTime(E.masterVol, E.ctx.currentTime); }
+}
 function seek(t) { const was = E.playing; if (was) { halt(); E.playing = false; E.pendingJump = null; } E.pos = t; if (was) play(0.03); }
 function fadeOutStop(sec = 3) {
   if (!E.playing) return;
@@ -329,9 +339,10 @@ async function loadSong(song, xf = S.xform[song.id]) {
     E.tempo = 1;
     if (xf && (xf.semi || xf.tempo !== 1)) await transformStems(xf.semi, xf.tempo);
     if (current !== song) return;
-    E.ablMarkers = extra.markers || []; E.pos = startPos(); showTrim();
+    E.stems.forEach((st) => { st.baseSegs = st.segs; }); E.baseDur = E.dur;
+    E.ablMarkers = (extra.markers || []).filter((m) => m.name && !/^\d+$/.test(m.name)); E.pos = startPos(); showTrim();
     E.bpm = extra.tempo ? extra.tempo * E.tempo : 0; $('#bpm').textContent = E.bpm ? String(Math.round(E.bpm * 10) / 10).replace(/\.0$/, '') : '—';
-    computePeaks(); drawWave(); rebuildMarkers();
+    rebuildMarkers();
     E.stems.forEach(buildStemNodes);
     $('#songMeta').textContent = `${E.stems.length} стемів · ${fmt(E.dur)}` + (extra.tempo ? ` · ${extra.tempo} BPM` : '');
     renderMarkers(); renderReport(extra.warnings || []);
@@ -339,6 +350,7 @@ async function loadSong(song, xf = S.xform[song.id]) {
     const dl = NET.downloaded - n0.downloaded, ca = NET.cached - n0.cached;
     status(hadMem ? 'Готово (з пам\'яті)' : dl ? `Готово · завантажено з Drive: ${dl} файлів, ${(((NET.bytes - n0.bytes)) / 1048576).toFixed(0)} МБ` : ca ? `Готово · з локального кешу (${ca} файлів)` : 'Готово');
     preloadNext();
+    if (S.autoDetect && song.src !== 'demo' && !baseMarkers().length && !S.arr[song.id]) setTimeout(() => { if (current === song) detectGuide(true); }, 800);
   } catch (e) { $('#songMeta').textContent = 'помилка: ' + e.message; status('Помилка: ' + e.message); }
   finally { if (current === song) E.loading = false; }
 }
@@ -371,7 +383,10 @@ function renderCards() {
     const h = hueOf(sg.name), ini = sg.name.split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
     const x = S.xform[sg.id], tag = x ? [x.semi ? (x.semi > 0 ? '+' : '') + x.semi + ' ст' : '', x.tempo !== 1 ? Math.round(x.tempo * 100) + '%' : ''].filter(Boolean).join(' ') : '';
     const el = document.createElement('div'); el.className = 'card' + (sg === current ? ' cur' : '');
-    el.innerHTML = '<div class="art"><i>→</i></div><div class="nm"></div>';
+    el.innerHTML = '<div class="art"><i></i></div><div class="nm"></div>';
+    const TR = { next: ['→', 'Після пісні: наступна'], stop: ['■', 'Після пісні: зупинитись'], fade: ['↘', 'Після пісні: fade out і наступна'] };
+    const ti = $('i', el), setTi = () => { const m = S.trans[sg.id] || 'next'; ti.textContent = TR[m][0]; ti.title = TR[m][1] + ' (клік — змінити)'; };
+    setTi(); ti.onclick = (e) => { e.stopPropagation(); const order = ['next', 'fade', 'stop']; const m = S.trans[sg.id] || 'next'; S.trans[sg.id] = order[(order.indexOf(m) + 1) % 3]; save('trans'); setTi(); };
     const art = $('.art', el); art.style.background = `linear-gradient(135deg,hsl(${h} 52% 40%),hsl(${(h + 45) % 360} 58% 20%))`;
     art.prepend(ini); $('.nm', el).textContent = sg.name; if (tag) { const em = document.createElement('em'); em.textContent = `(${tag})`; $('.nm', el).append(em); }
     el.onclick = () => loadSong(sg); box.append(el);
@@ -439,11 +454,164 @@ function patchAll(fn) {
   renderMatrix(); renderMixer();
 }
 
-function rebuildMarkers() {
-  const mine = (S.markers[E.song?.id] || []);
-  E.markers = [...(E.ablMarkers || []), ...mine].map((m) => ({ ...m, t0: m.t, t: m.t / E.tempo })).sort((a, b) => a.t - b.t);
-  renderMarkers();
+// ── Structure model: base markers -> sections -> (optional) edited arrangement ──
+const baseMarkers = () => [...(E.ablMarkers || []), ...(S.markers[E.song?.id] || [])].sort((x, y) => x.t - y.t);
+function baseSections() {                       // seconds of the ORIGINAL (tempo 1) timeline
+  const m = baseMarkers(); if (!m.length) return [];
+  const end = E.baseDur * E.tempo, out = [];
+  if (m[0].t > 1) out.push({ from: 0, to: m[0].t, name: '' });
+  m.forEach((x, i) => out.push({ from: x.t, to: i + 1 < m.length ? m[i + 1].t : end, name: x.name }));
+  return out.filter((x) => x.to - x.from > 0.05);
 }
+function mergeSegs(list) {
+  list.sort((x, y) => x.t - y.t); const out = [];
+  for (const g of list) {
+    const p = out[out.length - 1];
+    if (p && p.buffer === g.buffer && Math.abs(g.rate - p.rate) < 1e-6 && Math.abs(g.t - (p.t + p.d)) < 1e-3 && Math.abs(g.off - (p.off + p.d * p.rate)) < 2e-3) { p.d += g.d; p.cutOut = g.cutOut; }
+    else out.push({ ...g });
+  }
+  return out;
+}
+function rebuildMarkers() {
+  if (!E.song) return;
+  const arr = S.arr[E.song.id], T = E.tempo;
+  if (arr && arr.length) {
+    let V = 0;
+    const items = arr.map((it) => { const a = it.from / T, b = it.to / T, v = V; V += b - a; return { a, b, v, it }; });
+    E.stems.forEach((st) => {
+      const out = [];
+      items.forEach((x, idx) => {
+        for (const g of st.baseSegs) {
+          const s0 = Math.max(g.t, x.a), e0 = Math.min(g.t + g.d, x.b); if (e0 - s0 < 0.002) continue;
+          out.push({ ...g, t: x.v + (s0 - x.a), d: e0 - s0, off: g.off + (s0 - g.t) * g.rate,
+            cutIn: s0 > g.t + 1e-6 || idx > 0 || g.cutIn, cutOut: e0 < g.t + g.d - 1e-6 || idx < items.length - 1 || g.cutOut });
+        }
+      });
+      st.segs = mergeSegs(out);
+    });
+    E.dur = V; E.markers = items.map((x) => ({ t: x.v, name: x.it.name, t0: x.it.from }));
+  } else {
+    E.stems.forEach((st) => { st.segs = st.baseSegs; }); E.dur = E.baseDur;
+    E.markers = baseSections().map((x) => ({ t: x.from / T, name: x.name, t0: x.from }));
+  }
+  computePeaks(); drawWave(); renderMarkers(); renderStructure();
+}
+const arrHist = [];
+function commitArr(arr, { soft = false } = {}) {
+  const id = E.song.id; arrHist.push(JSON.stringify(S.arr[id] ?? null)); if (arrHist.length > 60) arrHist.shift();
+  if (arr) S.arr[id] = arr; else delete S.arr[id];
+  save('arr');
+  if (soft) { (arr || []).forEach((x, i) => { if (E.markers[i]) E.markers[i].name = x.name; }); renderMarkers(); renderStructure(); return; }
+  if (E.playing || E.pos) stop();
+  rebuildMarkers();
+}
+function undoArr() {
+  if (!arrHist.length || !E.song) return status('Нічого скасовувати');
+  const prev = JSON.parse(arrHist.pop()); const id = E.song.id;
+  if (prev) S.arr[id] = prev; else delete S.arr[id];
+  save('arr'); if (E.playing || E.pos) stop(); rebuildMarkers(); status('Скасовано');
+}
+const curArr = () => (S.arr[E.song?.id] ? S.arr[E.song.id].map((x) => ({ ...x })) : baseSections());
+function opDelete(i) { const a = curArr(); if (a.length <= 1) return status('Не можна видалити останню секцію'); const [r] = a.splice(i, 1); commitArr(a); status(`Видалено «${r.name || 'секція'}» · скасувати: EDIT → ↶ або Cmd+Z`); }
+function opDup(i) { const a = curArr(); a.splice(i + 1, 0, { ...a[i] }); commitArr(a); }
+function opMove(i, d) { const a = curArr(), j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; commitArr(a); }
+function opRename(i, name) { const a = curArr(); a[i].name = name; commitArr(a, { soft: true }); }
+function sectionIndexAt(p) { let k = -1; E.markers.forEach((m, i) => { if (m.t <= p + 1e-6) k = i; }); return k; }
+const baseAt = (i, p) => E.markers[i].t0 + (p - E.markers[i].t) * E.tempo;
+function opSplit(name) {
+  const p = position(), i = sectionIndexAt(p); if (i < 0) return status('Спершу додайте хоча б одну секцію');
+  const a = curArr(), b = baseAt(i, p);
+  if (b - a[i].from < 0.3 || a[i].to - b < 0.3) return status('Занадто близько до межі секції');
+  a.splice(i, 1, { ...a[i], to: b }, { from: b, to: a[i].to, name: name ?? ((a[i].name || '') + ' 2').trim() }); commitArr(a);
+}
+function opSetStart(i) {                         // boundary between section i-1 and i := playhead
+  const p = position(), k = sectionIndexAt(p), a = curArr();
+  if (i < 1 || (k !== i && k !== i - 1)) return status('Поставте курсор всередині цієї секції або попередньої');
+  const b = baseAt(k, p);
+  if (Math.abs(a[i - 1].to - a[i].from) > 1e-3) return status('Секції не суміжні — межу не можна зсунути');
+  if (b <= a[i - 1].from + 0.3 || b >= a[i].to - 0.3) return status('Занадто близько до іншої межі');
+  a[i - 1].to = b; a[i].from = b; commitArr(a);
+}
+function opMergeNext(i) {
+  const a = curArr(); if (i + 1 >= a.length) return;
+  if (Math.abs(a[i].to - a[i + 1].from) > 1e-3) return status('Секції не суміжні — об’єднати не можна');
+  a[i].to = a[i + 1].to; a.splice(i + 1, 1); commitArr(a);
+}
+function resetStructure() { if (!E.song) return; if (!S.arr[E.song.id]) return status('Структура вже початкова'); commitArr(null); status('Структуру скинуто до початкової'); }
+
+function renderStructure() {
+  const box = $('#structList'); if (!box) return;
+  box.innerHTML = '';
+  if (!E.markers.length) { box.innerHTML = '<p class="hint">Секцій ще немає. Натисніть «Визначити по Guide» або «＋ Секція тут».</p>'; return; }
+  E.markers.forEach((m, i) => {
+    const next = E.markers[i + 1] ? E.markers[i + 1].t : E.dur, info = secInfo(m.name);
+    const row = document.createElement('div'); row.className = 'srow';
+    row.innerHTML = `<span class="sb"></span><input class="sn" placeholder="назва"><span class="st"></span>
+      <button class="go" title="Перейти">▶</button><button class="up" title="Вгору">▲</button><button class="dn" title="Вниз">▼</button>
+      <button class="dup" title="Дублювати (повторити секцію)">⧉</button><button class="ss" title="Початок секції = позиція курсору">⇤</button>
+      <button class="mg" title="Об’єднати з наступною">⤵</button><button class="del" title="Видалити секцію">✕</button>`;
+    const sb = $('.sb', row); sb.textContent = info.code; sb.style.setProperty('--c', info.color);
+    const inp = $('.sn', row); inp.value = m.name; inp.onchange = () => opRename(i, inp.value.trim());
+    $('.st', row).textContent = `${fmt(m.t)}–${fmt(next)} (${fmt(next - m.t)})`;
+    $('.go', row).onclick = () => { E.queue = null; seek(m.t); };
+    $('.up', row).onclick = () => opMove(i, -1); $('.dn', row).onclick = () => opMove(i, 1);
+    $('.dup', row).onclick = () => opDup(i); $('.ss', row).onclick = () => opSetStart(i);
+    $('.mg', row).onclick = () => opMergeNext(i); $('.del', row).onclick = () => opDelete(i);
+    box.append(row);
+  });
+}
+
+// ── Section detection from the Guide stem (whisper in a worker) ──
+const ASR = { w: null, ready: null, id: 0, pend: new Map() };
+function asrInit() {
+  if (ASR.ready) return ASR.ready;
+  ASR.w = new Worker('asr-worker.js?v=' + (document.querySelector('script[src*="app.js"]').src.split('v=')[1] || '1'), { type: 'module' });
+  ASR.ready = new Promise((res, rej) => {
+    ASR.w.onmessage = ({ data: d }) => {
+      if (d.type === 'ready') res();
+      else if (d.type === 'progress') status(`Модель розпізнавання: ${Math.round(d.pct || 0)}% (${(d.file || '').split('/').pop()})`);
+      else if (d.type === 'text') ASR.pend.get(d.id)?.res(d.text);
+      else if (d.type === 'error') { if (d.id) ASR.pend.get(d.id)?.rej(new Error(d.message)); else { ASR.ready = null; rej(new Error(d.message)); } }
+    };
+    ASR.w.onerror = (e) => { ASR.ready = null; rej(new Error(e.message || 'не вдалось запустити розпізнавання')); };
+  });
+  ASR.w.postMessage({ type: 'init' });
+  return ASR.ready;
+}
+const asrText = (a) => new Promise((res, rej) => { const i = ++ASR.id; ASR.pend.set(i, { res, rej }); ASR.w.postMessage({ type: 'transcribe', id: i, audio: a }, [a.buffer]); });
+function guideSamples() {
+  const st = E.stems.find((x) => /guide|(^|\W)cues?$|гайд/i.test(x.name)); if (!st) return null;
+  const sr = 16000, n = Math.ceil(E.baseDur * sr), x = new Float32Array(n);
+  for (const g of st.baseSegs) {
+    const ch = g.buffer.getChannelData(0), bsr = g.buffer.sampleRate;
+    const i0 = Math.max(0, Math.floor(g.t * sr)), i1 = Math.min(n, Math.floor((g.t + g.d) * sr));
+    for (let i = i0; i < i1; i++) {
+      const src = Math.floor((g.off + (i / sr - g.t) * g.rate) * bsr); let acc = 0, c = 0;
+      for (let k = 0; k < 3 && src + k < ch.length; k++) { acc += ch[src + k]; c++; }
+      x[i] = c ? acc / c : 0;
+    }
+  }
+  return x;
+}
+async function detectGuide(auto = false) {
+  if (!E.song || E.detecting) return;
+  const x = guideSamples();
+  if (!x) { if (!auto) status('Не знайшов стем Guide/Cue у цій пісні'); return; }
+  const song = E.song; E.detecting = true; $('#btnDetect').disabled = true;
+  try {
+    status('Завантажую модель розпізнавання мови (перший раз ~40 МБ, далі з кешу)…'); await asrInit();
+    status('Слухаю Guide…');
+    const res = await detectSections(x, 16000, asrText, (d, t) => status(`Guide: розпізнано ${d}/${t}`));
+    if (E.song !== song) return;
+    if (!res.length) return status('У Guide не знайдено голосових підказок секцій');
+    const mine = (S.markers[song.id] || []).filter((m) => !m.auto);
+    S.markers[song.id] = [...mine, ...res.map((r) => ({ t: Math.round(r.t * E.tempo * 100) / 100, name: r.name, auto: true }))]; save('markers');
+    delete S.arr[song.id]; save('arr'); arrHist.length = 0; rebuildMarkers();
+    status(`Секції визначено по Guide: ${res.length}`);
+  } catch (e) { status('Guide: ' + e.message); }
+  finally { E.detecting = false; $('#btnDetect').disabled = false; }
+}
+
 const SEC_COLORS = { I: '#9b6bff', V: '#4c9dff', Pc: '#ffb020', C: '#22d6a0', B: '#ff6bb5', Tg: '#ff8a4c', O: '#8a91a2', In: '#4dd0e1' };
 function secInfo(name) {
   const n = (name || '').trim(), l = n.toLowerCase(), num = (l.match(/(\d+)\s*$/) || [])[1] || '';
@@ -460,14 +628,10 @@ function renderMarkers() {
     el.style.cssText = `left:${(sc.start / E.dur) * 100}%;width:${((sc.end - sc.start) / E.dur) * 100}%;--c:${info.color}`;
     el.innerHTML = '<div class="bg"></div><div class="bar"></div><div class="badge"></div>';
     const b = $('.badge', el); b.textContent = info.code;
-    b.title = `${sc.name || 'секція'} · ${fmt(sc.start)}\nКлік — перейти в кінці поточної секції; подвійний клік — одразу; ПКМ — видалити свою мітку`;
+    b.title = `${sc.name || 'секція'} · ${fmt(sc.start)}\nКлік — перейти в кінці поточної секції; подвійний клік — одразу; ПКМ — видалити секцію`;
     b.onclick = (e) => { e.stopPropagation(); if (E.playing) { E.queue = sc.start; renderMarkers(); } else seek(sc.start); };
     b.ondblclick = (e) => { e.stopPropagation(); E.queue = null; seek(sc.start); renderMarkers(); };
-    b.oncontextmenu = (e) => {
-      e.preventDefault(); e.stopPropagation(); const mine = S.markers[E.song.id] || [];
-      const k = mine.findIndex((x) => x.t === m.t0 && x.name === m.name);
-      if (k >= 0) { mine.splice(k, 1); S.markers[E.song.id] = mine; save('markers'); rebuildMarkers(); }
-    };
+    b.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); if (confirm(`Видалити секцію «${sc.name || 'секція'}» зі структури?`)) opDelete(i); };
     box.append(el);
   });
 }
@@ -509,6 +673,7 @@ $('#wave').onclick = (e) => { if (!E.dur) return; const r = e.currentTarget.getB
 function markCurrentSection() {
   if (!E.song) return;
   const name = prompt('Назва секції (Verse, Chorus, Bridge…)', ''); if (name === null) return;
+  if (S.arr[E.song.id]) return opSplit(name.trim());
   const m = S.markers[E.song.id] ||= []; m.push({ t: Math.round(position() * E.tempo * 100) / 100, name: name.trim() });
   save('markers'); rebuildMarkers();
 }
@@ -524,18 +689,29 @@ function renderReport(w) {
 }
 
 // ── Ableton projects ──
-let ablIndex = null;
+let ablIndex = null, ablCache = null;
 async function openAbleton() {
   if (!window.showDirectoryPicker) return status('Потрібен Chrome/Edge');
   const root = await showDirectoryPicker();
   status('Шукаю проєкти Ableton…');
   ablIndex = await indexFolder(root);
+  ablCache = null; const mc = ablIndex.byName.get('markers-cache.json')?.[0];
+  if (mc) { try { ablCache = JSON.parse(await (await mc.handle.getFile()).text()); } catch {} }
   const projects = ablIndex.projects;
   library = library.filter((s) => s.src !== 'als').concat(projects.map((p) => ({
     id: 'als:' + p.parts.join('/'), name: p.name.replace(/\.als$/i, ''), src: 'als', prefetch: async () => {},
-    load: async (q) => loadProject(p, ablIndex, E.ctx, (d, n) => { if (!q) status(`${p.name}: ${d}/${n} треків`); }),
+    load: async (q) => { const r = await loadProject(p, ablIndex, E.ctx, (d, n) => { if (!q) status(`${p.name}: ${d}/${n} треків`); }); await applyMarkersCache(r, p); return r; },
   })));
   renderLibrary(); status(`Знайдено проєктів Ableton: ${projects.length}`);
+}
+
+// Section markers heard earlier by whisper on the Guide (team's _setlist-tools/markers-cache.json): [[seconds, "Verse 1"], ...]
+async function applyMarkersCache(r, p) {
+  if (!ablCache) return;
+  if ((r.markers || []).filter((m) => m.name && !/^\d+$/.test(m.name)).length >= 3) return;
+  const base = `${p.parts[p.parts.length - 2]}/${p.name}`, size = (await p.handle.getFile()).size;
+  const hit = ablCache[`${base}|${size}`] || Object.entries(ablCache).find(([k]) => k.startsWith(base + '|'))?.[1];
+  if (hit) r.markers = hit.map(([t, name]) => ({ t, name })).filter((m) => m.t <= r.dur);
 }
 
 // ── Export stems as WAV (24-bit) into a folder — e.g. a Drive-synced one ──
@@ -678,7 +854,7 @@ async function transformStems(semi, tempo) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181413', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181423', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -712,6 +888,11 @@ $('#xReset').onclick = () => { if (!current) return; delete S.xform[current.id];
 // ── Section / trim / transport extras ──
 $('#btnLoop').onclick = () => { E.loop = !E.loop; $('#btnLoop').classList.toggle('on', E.loop); };
 $('#btnMark').onclick = markCurrentSection;
+$('#btnDetect').onclick = () => { if (S.arr[E.song?.id] && !confirm('Структуру вже змінено вручну. Визначити заново й скинути правки?')) return; detectGuide(false); };
+$('#btnSplit').onclick = () => opSplit();
+$('#btnUndo').onclick = undoArr; $('#btnResetStruct').onclick = resetStructure;
+$('#chkDetect').checked = S.autoDetect; $('#chkDetect').onchange = (e) => { S.autoDetect = e.target.checked; save('autoDetect'); };
+addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.code === 'KeyZ' && !/INPUT|TEXTAREA/.test(e.target.tagName)) { e.preventDefault(); undoArr(); } });
 function nextSection() {
   const s = sections(); if (!s.length) return;
   const i = s.findIndex((x) => x === sectionAt(position())); const nx = s[i + 1];
@@ -813,3 +994,6 @@ addEventListener('keydown', (e) => {
 offlineDrive(); renderLibrary(); renderSetlist();
 await initAudio(); await fillDevices(); tick();
 status(`Вихід: ${E.nOut} кан.`);
+
+// Small hook for debugging / automated tests
+window.PB = { addSong(song) { library.push(song); renderLibrary(); }, load: loadSong, state: () => ({ markers: E.markers, dur: E.dur, tempo: E.tempo, arr: S.arr[E.song?.id] || null, stems: E.stems.map((x) => ({ name: x.name, segs: x.segs.length })) }), ops: { opDelete, opDup, opMove, opSplit, opMergeNext, opRename, resetStructure, undoArr, detectGuide } };
