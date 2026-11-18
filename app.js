@@ -1,7 +1,7 @@
 // Playback web app: multitrack stems -> routable outputs (Dante Virtual Soundcard / any multichannel device)
-import { startHost, loadScript } from './remote-host.js?v=202611181529';
-import { detectSections } from './guide.js?v=202611181529';
-import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181529';
+import { startHost, loadScript } from './remote-host.js?v=202611181536';
+import { detectSections } from './guide.js?v=202611181536';
+import { indexFolder, loadProject, AUDIO_RE as ABL_AUDIO } from './ableton.js?v=202611181536';
 const $ = (s, el = document) => el.querySelector(s);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem('pb.' + k)) ?? d; } catch { return d; } },
@@ -23,7 +23,7 @@ const S = {
 };
 const save = (k) => { store.set(k, S[k]); if (k === 'setlist' && typeof syncSunday === 'function') syncSunday(); };
 const status = (t) => { $('#status').textContent = t; const n = $('#pfNote'); if (n && !$('#preflight').hidden) n.textContent = t; };
-const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+const fmt = (s) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00');
 const key = (n) => n.trim().toLowerCase();
 
 // ───────────── Audio engine ─────────────
@@ -243,12 +243,15 @@ async function dList(q, fields) {
 }
 const folderId = (s) => (s.match(/folders\/([\w-]+)/) || s.match(/[?&]id=([\w-]+)/) || [, s.trim()])[1];
 
+const hasToken = () => !!(token && Date.now() < tokenExp - 60000);
 async function driveStemFiles(songId) {
+  const cached = S.index[songId];
+  if (cached?.length && !hasToken()) return cached;           // not signed in (or offline): use the file list remembered earlier
   try {
     const files = (await dList(`'${songId}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'`,
       'id,name,md5Checksum,modifiedTime')).filter((f) => AUDIO_RE.test(f.name));
     S.index[songId] = files; save('index'); return files;
-  } catch (e) { if (S.index[songId]) return S.index[songId]; throw e; }
+  } catch (e) { if (cached?.length) return cached; throw e; }
 }
 async function driveBuf(f) {
   const cache = await caches.open('stems-v1');
@@ -283,7 +286,7 @@ function driveEntry(f, filesFn) {
     id: f.id, name: f.name, src: 'drive',
     load: async (q) => items(await filesFn(), q),
     loadGuide: async (q) => items((await filesFn()).filter((x) => GUIDE_RE.test(stemName(x.name))), q),   // only the Guide stem (cheap) for section detection
-    prefetch: async (cb) => { const fl = await filesFn(); let d = 0; for (const x of fl) { await driveBuf(x); cb?.(++d, fl.length); } },
+    prefetch: async (cb) => { const fl = await filesFn(); if (!fl.length) throw new Error('у папці немає аудіофайлів (або немає доступу до неї)'); let d = 0; for (const x of fl) { await driveBuf(x); cb?.(++d, fl.length); } },
   };
 }
 async function connectDrive() {
@@ -305,7 +308,7 @@ async function connectDrive() {
 function offlineDrive() {       // show cached Drive songs without login
   const folders = store.get('driveSongs', []);
   if (!folders.length) return;
-  library = library.concat(folders.map((f) => driveEntry(f, async () => S.index[f.id] || [])));
+  library = library.concat(folders.map((f) => driveEntry(f, () => driveStemFiles(f.id))));
 }
 
 async function openLocal() {
@@ -344,7 +347,7 @@ const XC = new Map();                 // song.id -> pre-computed key/tempo trans
 const decoded = new Map();            // song.id -> Promise<items>; economy mode keeps current + next song only, full mode keeps all
 function getItems(song, quiet) {
   if (!decoded.has(song.id)) {
-    const p = Promise.resolve(song.load(quiet)); decoded.set(song.id, p);
+    const p = Promise.resolve(song.load(quiet)).then((r) => { if (!stemsOf(r).length) throw new Error('у пісні не знайдено аудіофайлів — перевірте папку на Drive та доступ'); return r; }); decoded.set(song.id, p);
     p.catch(() => decoded.delete(song.id));
   }
   return decoded.get(song.id);
@@ -1078,7 +1081,7 @@ async function transformStems(semi, tempo, stems = E.stems, progress = null) {
   const total = queue.length; let done = 0; const t0 = performance.now();
   const N = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
   await Promise.all(Array.from({ length: N }, async () => {
-    const w = new Worker('stretch-worker.js?v=202611181529', { type: 'module' });
+    const w = new Worker('stretch-worker.js?v=202611181536', { type: 'module' });
     try {
       while (queue.length) {
         const { buf, f } = queue.shift();
@@ -1365,7 +1368,7 @@ function showScreen(name) { $('#home').hidden = name !== 'home'; $('#preflight')
 
 function renderLibInfo() {
   const c = (src) => library.filter((x) => x.src === src).length, p = [];
-  if (c('drive')) p.push(`Google Drive: ${c('drive')} пісень`); if (c('local')) p.push(`Папка: ${c('local')}`); if (c('als')) p.push(`Ableton: ${c('als')}`); if (c('click')) p.push(`без плейбеку: ${c('click')}`);
+  if (c('drive')) p.push(`Google Drive: ${c('drive')} пісень${hasToken() ? ' · ви ввійшли' : ' · вхід у Google буде запитано під час підготовки'}`); if (c('local')) p.push(`Папка: ${c('local')}`); if (c('als')) p.push(`Ableton: ${c('als')}`); if (c('click')) p.push(`без плейбеку: ${c('click')}`);
   $('#hLibInfo').textContent = p.length ? p.join(' · ') : 'Бібліотека порожня — підключіть Google Drive або оберіть папку з плейбеками.';
   $('#hDrive').classList.toggle('on', !!c('drive'));
 }
@@ -1498,11 +1501,15 @@ async function pfPrepare(i, sg, mode) {
 }
 async function startPreflight() {
   if (PF.running) return; if (!S.setlist.length) return;
+  const needSignIn = S.setlist.some((id) => { const x = library.find((y) => y.id === id); return x?.src === 'drive' && !S.index[x.id]?.length; });
+  let signInErr = '';
+  if (needSignIn && !hasToken()) { try { await getToken(); } catch (e) { signInErr = e.message; } }   // runs inside the click: the Google popup is allowed
   showScreen('preflight'); PF.cancel = false; PF.running = true; PF.t0 = performance.now();
   const songs = S.setlist.map((id) => library.find((x) => x.id === id) || null);
   const sun = activeSunday(); $('#pfTitle').textContent = `Підготовка: ${sun ? sun.name : 'сетліст'}`; $('#pfMem').value = S.memMode;
   $('#pfEnter').disabled = true; $('#pfRetry').hidden = true; $('#pfNote').textContent = ''; $('#pfSummary').textContent = '';
   pfBuild(songs); pfOverall();
+  if (signInErr) $('#pfNote').textContent = 'Вхід у Google не вдався (' + signInErr + '). Натисніть «Google Drive» на головній і повторіть.';
   const mode = S.memMode;
   const filesReady = songs.map(() => { let r; const p = new Promise((res) => (r = res)); p.fin = r; return p; });
   (async () => {            // downloader runs ahead of the decoder
@@ -1530,7 +1537,8 @@ async function startPreflight() {
 async function enterPerform() {
   const list = S.setlist.map((id) => library.find((x) => x.id === id)).filter(Boolean);
   showScreen(null); renderSetlist();
-  if (list.length && current !== list[0]) await loadSong(list[0]); else preloadNext();
+  const okFirst = list.find((sg) => !PF.rows[S.setlist.indexOf(sg.id)]?.err) || list[0];
+  if (okFirst && current !== okFirst) await loadSong(okFirst); else preloadNext();
 }
 $('#pfEnter').onclick = enterPerform;
 $('#pfCancel').onclick = () => { PF.cancel = true; PF.running = false; showScreen('home'); };
